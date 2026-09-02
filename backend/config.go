@@ -53,8 +53,10 @@ type NotificationsConfig struct {
 }
 
 type ModelConfig struct {
-	Path       string `yaml:"path"`
-	MmprojPath string `yaml:"mmproj_path"`
+	Path           string `yaml:"path"`
+	MmprojPath     string `yaml:"mmproj_path"`
+	Threads        int    `yaml:"threads"`         // 0 = let llama.cpp auto-detect
+	TimeoutSeconds int    `yaml:"timeout_seconds"` // per-inference-call timeout
 }
 
 type LocalAlarmConfig struct {
@@ -125,6 +127,12 @@ func loadConfig() (*Config, error) {
 	}
 	if cfg.LocalAlarm.RepeatCount == 0 {
 		cfg.LocalAlarm.RepeatCount = 3
+	}
+	if cfg.Model.TimeoutSeconds == 0 {
+		// 120s worked fine on the Mac dev machine but blew past on a slow
+		// CPU-only Windows box (vision encoding alone took ~123s there) -
+		// default generous, let slow/fast hardware both tune it explicitly.
+		cfg.Model.TimeoutSeconds = 300
 	}
 
 	// Resolve relative model paths against the project root, not whatever

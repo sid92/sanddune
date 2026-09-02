@@ -73,8 +73,15 @@ pages anyone. That's the Watchdog box — future work, not solved today.
 - Tank replenishment detector: full state machine (deadline tracking, single-fire
   notification, day/window gating) tested end-to-end via Go integration tests
   (`backend/detector_test.go`) against the real inference pipeline.
-- Build: compiles natively on macOS, cross-compiles to Windows. Live Windows build/test
-  run in progress.
+- Build: compiles natively on macOS, cross-compiles to Windows.
+- Windows hardware test: ran the same integration tests on a real Windows box (Intel
+  Core i3-6100, 2 cores/4 threads, 8GB RAM, no GPU). Output was correct — matched
+  ground truth exactly — but took ~4.7 minutes per frame, dominated by vision encoding
+  (~123s). That's a hardware ceiling on this specific CPU, not a bug: the vision
+  encoder is the same size regardless of model/quant choice, so it doesn't shrink with
+  a smaller model. Exposed a real bug this same run caught: `runVLM`'s inference
+  timeout was hardcoded to 120s, shorter than vision encoding alone took here - now
+  configurable (`model.timeout_seconds`, `model.threads`) instead of hardcoded.
 
 **Not yet field-tested:**
 - Event-triggered detector (VAT/batch-change): state machine unit-tested against a
