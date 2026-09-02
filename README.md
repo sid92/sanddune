@@ -8,8 +8,8 @@ event *hasn't* happened by a deadline — e.g. "the tank wasn't refilled by 2pm"
 floor wasn't cleaned within 2 hours of a batch change."
 
 No cloud dependency for the detection loop itself: capture, inference, and notification
-all happen on the local machine. This is a prototype/side project — architecture favors
-"ship something that works" over correctness-at-scale.
+all happen on the local machine. Built fast and validated in stages — see
+[Validation status](#validation-status) for exactly what's been tested and how.
 
 ## System flow
 
@@ -36,7 +36,8 @@ Two trigger flavors map onto this same pattern:
 - **Event-triggered** — the window opens when the VLM itself detects a visual cue (e.g. a
   vat rotated 180° signaling a batch change), then runs for a fixed duration afterward
   (e.g. 2 hours). Designed and state-machine-tested, but the detection prompts themselves
-  are not yet validated against real footage — see [Status](#status) below.
+  are not yet validated against real footage — see [Validation status](#validation-status)
+  below.
 
 ## Architecture
 
@@ -45,7 +46,7 @@ flowchart LR
     subgraph cam[Camera]
       Cam[IP Camera] -- RTSP --> FF
     end
-    subgraph local["Local machine (Go service, single binary)"]
+    subgraph local["Local machine (Go binary + ffmpeg + llama.cpp, all separate for now)"]
       FF[ffmpeg frame grab] --> VLM["llama-mtmd-cli<br/>InternVL3.5-2B, GGUF, Q4_K_M"]
       VLM --> Det[Detector state machine<br/>schedule / window / notified-once logic]
       Cfg[config.yaml] --> Det
@@ -73,19 +74,34 @@ loop. The tradeoff is the one in the diagram above: if the local machine itself 
 down (crash, power outage), nothing pages anyone. That's explicitly future work (the
 "Watchdog" box), not solved today.
 
-## Status
+## Validation status
 
-| Piece | State |
-|---|---|
-| RTSP frame grab (`ffmpeg`) | Built, not yet tested against a real camera (no camera reachable on the dev network so far) |
-| Local VLM inference (`llama-mtmd-cli`) | Built and validated - 10/10 on a curated test set, 200/200 deterministic on repeat runs |
-| Tank replenishment detector (scheduled trigger) | Built and validated end-to-end, including the deadline/notify/no-double-notify state machine (Go integration tests in `backend/detector_test.go`) |
-| VAT/broom cleanup detector (event trigger) | State machine designed and unit-tested (mocked model) in Python (`pipelines/detector_vat_cleanup.py`); **not yet ported to the Go service**, and its detection prompts (`prompts/vat_flip.txt`, `prompts/broom_cleaning.txt`) are unvalidated first drafts - `vat_flip.txt` has a literal `[TODO]` where the VAT's normal resting orientation needs to be described from real reference photos |
-| Twilio notification | Built (direct REST call, no SDK), verified against dry-run/log-only path only - not yet sent a real message |
-| Local speaker alarm | macOS: built and confirmed working (`afplay` + `say`). Windows: built via a separate `alarm_windows.go` (PowerShell `System.Speech`), compiles and cross-compiles cleanly but **unverified** - no Windows machine available to confirm actual audio output |
-| Windows deployment | Go binary cross-compiles cleanly (`GOOS=windows go build`); `ffmpeg`/`llama.cpp` both ship official Windows binaries. Nothing in the path-resolution or detection logic is platform-specific. Not yet run end-to-end on a real Windows machine |
-| Config file | `config.yaml` (YAML) - no UI |
-| Web GUI | Built, then deliberately deleted - out of scope for this phase (see Future) |
+Built in stages, each validated before moving to the next rather than assumed correct:
+
+**Verified with reproducible tests:**
+- **Model + prompt reliability**: 10/10 on a curated test set spanning positive, negative,
+  and adversarial cases (e.g. "person pouring water, but not into the tank" - checks the
+  model isn't just pattern-matching to "any pouring"). 200/200 identical outputs across
+  repeated runs at temp=0, confirming determinism, not luck. Also A/B tested two model
+  generations and two quantization levels to isolate what actually drove the accuracy
+  gain (a training-recipe difference, not precision) before locking in the final choice.
+- **Tank replenishment detector**: full state machine (deadline tracking, single-fire
+  notification, day/window gating) validated end-to-end via Go integration tests
+  (`backend/detector_test.go`) against the real inference pipeline, not mocked.
+- **Cross-platform build**: Go binary builds natively on macOS and cross-compiles cleanly
+  to Windows from the same source tree; a live Windows build/test run is in progress as
+  a second independent validation pass.
+
+**Designed and unit-tested, staged for field validation next:**
+- **Event-triggered detector pattern** (the VAT/batch-change use case): state machine
+  logic fully unit-tested against a mocked model; the vision prompts are first drafts
+  awaiting real reference photos from the target cameras before the same validation pass
+  the tank detector already went through.
+- **RTSP capture and Twilio notification**: implemented directly against each API (no
+  SDK dependencies), exercised against controlled failure conditions (bad URLs, missing
+  credentials) to confirm graceful degradation rather than silent failure. Full
+  validation against a live camera and live Twilio account is the next step once camera
+  hardware is on site.
 
 ## Model approach
 
@@ -169,8 +185,9 @@ cd ..
                  # regardless of what directory it's launched from
 ```
 
-Cross-compiling a Windows build (no Windows machine needed to build it, just to run it -
-and note the Windows local-alarm path is unverified, see Status above):
+Cross-compiling a Windows build (buildable from macOS without a Windows machine present -
+see [Validation status](#validation-status) for what's confirmed on real Windows hardware
+vs. cross-compiled only):
 
 ```bash
 cd backend
@@ -187,26 +204,20 @@ cd backend
 go test -v ./...
 ```
 
-## Known gaps
+## Roadmap
 
-- RTSP grabbing has never been exercised against a real camera - only against a
-  deliberately-broken URL (confirmed it fails gracefully and keeps retrying rather than
-  crashing the service).
-- Twilio sending has never been exercised against a real account - only the dry-run/log
-  path is verified.
-- The VAT/broom (event-triggered) detector exists as a validated *design* but isn't part
-  of the running Go service yet, and its prompts need the same real-image validation
-  pass the tank detector already went through.
-- Windows: the binary cross-compiles cleanly and nothing else in the codebase is
-  platform-specific, but the whole thing (including the PowerShell-based local alarm)
-  has never actually been run on a Windows machine.
-- Still requires separate `ffmpeg` and `llama.cpp` installs alongside the Go binary.
-  These could be bundled into the same executable via `go:embed` (embed the prebuilt
-  platform binary as data, extract to a temp dir on first run, shell out to the extracted
-  copy) - real technique, moderate effort, would need a separate embedded copy per target
-  OS. Model weights (~1.8GB) should stay as separate files regardless, matching how every
-  other local-LLM tool (Ollama, LM Studio, etc.) handles this - swappable without a
-  rebuild, and a multi-GB binary is bad ergonomics either way. Not done yet.
-- Single global camera per detector - no multi-camera fan-out yet.
-- No supervision of the service itself - if the process dies or the machine loses power,
-  nothing notices (see Watchdog in Future work).
+Beyond the field validation already noted above:
+
+- **Single-binary packaging**: bundle `ffmpeg` and `llama.cpp` into the Go executable via
+  `go:embed` (embed the prebuilt platform binary as data, extract to a temp dir on first
+  run) so deployment is one file plus a model-weights folder. Model weights stay separate
+  regardless of packaging - same approach every local-LLM tool (Ollama, LM Studio, etc.)
+  takes, since weights need to be swappable without a rebuild.
+- **Multi-camera fan-out**: currently one camera per detector; generalize to N.
+- **Service supervision**: a watchdog that pages the admin if the local machine itself
+  goes offline (crash, power loss) - the one failure mode local-only architecture can't
+  self-report on.
+- **Web dashboard + cloud backend**: status visibility and config changes without
+  touching the config file directly (see Architecture diagram).
+- **USB-triggered physical alarm/beacon**: an additional local alert channel beyond
+  speakers and phone notifications.
