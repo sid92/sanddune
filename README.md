@@ -1,20 +1,14 @@
 # sanddune
 
-Local SOP Alarm System
+Local SOP alarm system. Samples RTSP camera feeds on an interval, runs each frame through
+a local vision-language model, and fires an alert if an expected event hasn't happened by
+a deadline — e.g. tank not refilled by 2pm, floor not cleaned within 2 hours of a batch
+change.
 
-A local, camera-based compliance watchdog. It samples RTSP camera feeds on an interval,
-runs each frame through a local vision-language model, and fires an alert if an expected
-event *hasn't* happened by a deadline — e.g. "the tank wasn't refilled by 2pm" or "the
-floor wasn't cleaned within 2 hours of a batch change."
-
-No cloud dependency for the detection loop itself: capture, inference, and notification
-all happen on the local machine. Built fast and validated in stages — see
-[Validation status](#validation-status) for exactly what's been tested and how.
+Capture, inference, and notification all run on the local machine. No cloud dependency
+in the detection loop.
 
 ## System flow
-
-Every detector follows the same shape, regardless of what triggers it or what it's
-looking for:
 
 ```mermaid
 flowchart TD
@@ -30,14 +24,12 @@ flowchart TD
     A --> SPK[Local speaker alarm - tone + spoken message, 3x]
 ```
 
-Two trigger flavors map onto this same pattern:
-- **Scheduled** — a fixed day/time window (e.g. Monday 07:00–14:00). Built and validated:
-  `detectors.tank_replenish` in `config.yaml`.
-- **Event-triggered** — the window opens when the VLM itself detects a visual cue (e.g. a
-  vat rotated 180° signaling a batch change), then runs for a fixed duration afterward
-  (e.g. 2 hours). Designed and state-machine-tested, but the detection prompts themselves
-  are not yet validated against real footage — see [Validation status](#validation-status)
-  below.
+Two trigger types, same underlying pattern:
+- **Scheduled** — fixed day/time window (e.g. Monday 07:00–14:00). `detectors.tank_replenish`
+  in `config.yaml`.
+- **Event-triggered** — window opens when the VLM detects a visual cue (e.g. a vat rotated
+  180° signaling a batch change), runs for a fixed duration after (e.g. 2 hours). Prompts
+  not yet validated against real footage — see [Validation status](#validation-status).
 
 ## Architecture
 
@@ -67,79 +59,62 @@ flowchart LR
     Backend -.-> Watchdog
 ```
 
-**Why local-first**: this started as an open question (local vs. an AWS backend calling
-Twilio). Decision: everything - including the Twilio API call - runs on the local
-machine for now. Simpler, no hosting cost, no network dependency for the core detection
-loop. The tradeoff is the one in the diagram above: if the local machine itself goes
-down (crash, power outage), nothing pages anyone. That's explicitly future work (the
-"Watchdog" box), not solved today.
+Everything runs local, including the Twilio call — no backend service. Simpler, no
+hosting cost. Tradeoff: if the local machine goes down (crash, power loss), nothing
+pages anyone. That's the Watchdog box — future work, not solved today.
 
 ## Validation status
 
-Built in stages, each validated before moving to the next rather than assumed correct:
+**Verified:**
+- Model + prompt: 10/10 on a curated test set — positive, negative, and adversarial
+  cases (e.g. person pouring water but not into the tank). 200/200 identical outputs
+  across repeated runs at temp=0. Compared two model generations and two quantization
+  levels before settling on the current config.
+- Tank replenishment detector: full state machine (deadline tracking, single-fire
+  notification, day/window gating) tested end-to-end via Go integration tests
+  (`backend/detector_test.go`) against the real inference pipeline.
+- Build: compiles natively on macOS, cross-compiles to Windows. Live Windows build/test
+  run in progress.
 
-**Verified with reproducible tests:**
-- **Model + prompt reliability**: 10/10 on a curated test set spanning positive, negative,
-  and adversarial cases (e.g. "person pouring water, but not into the tank" - checks the
-  model isn't just pattern-matching to "any pouring"). 200/200 identical outputs across
-  repeated runs at temp=0, confirming determinism, not luck. Also A/B tested two model
-  generations and two quantization levels to isolate what actually drove the accuracy
-  gain (a training-recipe difference, not precision) before locking in the final choice.
-- **Tank replenishment detector**: full state machine (deadline tracking, single-fire
-  notification, day/window gating) validated end-to-end via Go integration tests
-  (`backend/detector_test.go`) against the real inference pipeline, not mocked.
-- **Cross-platform build**: Go binary builds natively on macOS and cross-compiles cleanly
-  to Windows from the same source tree; a live Windows build/test run is in progress as
-  a second independent validation pass.
-
-**Designed and unit-tested, staged for field validation next:**
-- **Event-triggered detector pattern** (the VAT/batch-change use case): state machine
-  logic fully unit-tested against a mocked model; the vision prompts are first drafts
-  awaiting real reference photos from the target cameras before the same validation pass
-  the tank detector already went through.
-- **RTSP capture and Twilio notification**: implemented directly against each API (no
-  SDK dependencies), exercised against controlled failure conditions (bad URLs, missing
-  credentials) to confirm graceful degradation rather than silent failure. Full
-  validation against a live camera and live Twilio account is the next step once camera
-  hardware is on site.
+**Not yet field-tested:**
+- Event-triggered detector (VAT/batch-change): state machine unit-tested against a
+  mocked model. Prompts are first drafts — need real reference photos from the target
+  cameras before the same validation pass the tank detector went through.
+- RTSP capture and Twilio notification: implemented directly against each API, tested
+  against bad URLs and missing credentials for graceful failure. Not yet run against a
+  live camera or live Twilio account.
 
 ## Model approach
 
-Currently running **InternVL3.5-2B**, quantized to **Q4_K_M** (~1.2GB) via `llama.cpp`,
-zero-shot (prompted, not fine-tuned). This was chosen after direct comparison testing:
+Running **InternVL3.5-2B**, quantized to **Q4_K_M** (~1.2GB) via `llama.cpp`, zero-shot
+(prompted, not fine-tuned).
 
-- The *previous* generation (InternVL3, non-3.5) failed our test set regardless of
-  quantization level (both Q4 and near-lossless Q8 got basic cases wrong).
-- InternVL3.5-2B at the same quantization passed cleanly - confirming the gap was a
-  training-recipe generational difference, not a quantization-precision one.
-- Prompt design matters more than model size within a generation: adding an explicit
-  "what is the person doing" field before the yes/no answer measurably improved accuracy
-  on ambiguous frames, reproducibly across 10 repeated runs both ways.
+- The previous generation (InternVL3, non-3.5) failed the test set at any quantization
+  level. InternVL3.5-2B passed cleanly at the same quantization — the gap was the
+  training recipe, not precision.
+- Prompt wording mattered more than model size: adding a "what is the person doing"
+  field before the yes/no answer improved accuracy on ambiguous frames, reproducibly
+  across 10 repeated runs both ways.
 
-**Planned next step**: fine-tune a smaller (~1B) InternVL checkpoint via **LoRA** once
-there's a real bank of labeled footage from the actual deployed cameras. Practically:
-- Collect real frames from the live cameras, labeled with the correct field values
-  (ideally 50-200+ examples per class, including known hard cases).
-- Fine-tune the HuggingFace-format checkpoint (not the GGUF one) using InternVL's
-  official `internvl_chat` LoRA training scripts.
-- Merge the LoRA weights, then re-convert to GGUF via `convert_hf_to_gguf.py` +
-  `llama-quantize` - same deployment pipeline used for the current model.
-
-Not done yet - zero-shot 2B is already meeting the bar on available test data; revisit
-once there's real-world footage to train and evaluate against.
+**Next**: fine-tune a smaller (~1B) InternVL checkpoint via LoRA once there's a real
+bank of labeled footage from the deployed cameras — collect real frames (50-200+ per
+class, including known hard cases), fine-tune the HuggingFace checkpoint with InternVL's
+`internvl_chat` LoRA scripts, merge, then re-convert to GGUF with the same pipeline
+used for the current model. Not started — zero-shot 2B is meeting the bar on available
+test data.
 
 ## Triggers & actions
 
 | | Available now | Future |
 |---|---|---|
-| **Triggers** | Scheduled window (day + start hour + deadline hour) | Event-triggered window (visual cue starts an N-hour countdown) - designed, not yet wired into the Go service |
+| **Triggers** | Scheduled window (day + start hour + deadline hour) | Event-triggered window (visual cue starts an N-hour countdown) - designed, not wired into the Go service |
 | **Detection** | Local zero-shot VLM (InternVL3.5-2B) | Fine-tuned local VLM (~1B, LoRA) once labeled data exists |
-| **Actions** | Twilio SMS/WhatsApp to one configured number; local speaker alarm (tone + spoken message x3) | USB-triggered physical alarm/beacon; web dashboard for status + config changes; cloud backend for richer notification routing; watchdog service that pages if the local machine itself goes offline |
+| **Actions** | Twilio SMS/WhatsApp to one number; local speaker alarm (tone + spoken message x3) | USB-triggered physical alarm/beacon; web dashboard for status + config; cloud backend for notification routing; watchdog for machine-down alerts |
 
 ## Configuration
 
-Copy `config.yaml.example` to `config.yaml` and fill in real values - `config.yaml` is
-gitignored since it holds the Twilio auth token.
+Copy `config.yaml.example` to `config.yaml` and fill in real values. `config.yaml` is
+gitignored — it holds the Twilio auth token.
 
 ```yaml
 detectors:
@@ -169,34 +144,33 @@ local_alarm:
   repeat_count: 3
 ```
 
-`config.yaml` is re-read on every check, so edits take effect without restarting the
-service.
+Re-read on every check — edits take effect without a restart.
 
 ## Running it
 
 Requires `llama-mtmd-cli` (from `llama.cpp`) and `ffmpeg` on PATH, and the model files
-present under `gguf/` (see `gguf/v35/` for the exact files used).
+under `gguf/` (see `gguf/v35/`).
 
 ```bash
 cd backend
 go build -o ../sanddune .
 cd ..
 ./sanddune   # finds config.yaml, gguf/, prompts/, state/ next to the binary itself,
-                 # regardless of what directory it's launched from
+             # regardless of what directory it's launched from
 ```
 
-Cross-compiling a Windows build (buildable from macOS without a Windows machine present -
-see [Validation status](#validation-status) for what's confirmed on real Windows hardware
-vs. cross-compiled only):
+Cross-compiling for Windows (buildable from macOS, no Windows machine needed for the
+build itself — see [Validation status](#validation-status) for what's confirmed on real
+Windows hardware):
 
 ```bash
 cd backend
 GOOS=windows GOARCH=amd64 go build -o ../sanddune.exe .
 ```
-Then copy `sanddune.exe` alongside `config.yaml`, `gguf/`, `prompts/`, plus Windows
-builds of `llama-mtmd-cli.exe` and `ffmpeg.exe` on PATH.
+Copy `sanddune.exe` alongside `config.yaml`, `gguf/`, `prompts/`, plus Windows builds of
+`llama-mtmd-cli.exe` and `ffmpeg.exe` on PATH.
 
-To test the detection logic without a live camera, use the Go integration test (bypasses
+To test detection logic without a live camera, use the Go integration test (bypasses
 RTSP via an image file):
 
 ```bash
@@ -206,18 +180,13 @@ go test -v ./...
 
 ## Roadmap
 
-Beyond the field validation already noted above:
-
 - **Single-binary packaging**: bundle `ffmpeg` and `llama.cpp` into the Go executable via
   `go:embed` (embed the prebuilt platform binary as data, extract to a temp dir on first
-  run) so deployment is one file plus a model-weights folder. Model weights stay separate
-  regardless of packaging - same approach every local-LLM tool (Ollama, LM Studio, etc.)
-  takes, since weights need to be swappable without a rebuild.
-- **Multi-camera fan-out**: currently one camera per detector; generalize to N.
-- **Service supervision**: a watchdog that pages the admin if the local machine itself
-  goes offline (crash, power loss) - the one failure mode local-only architecture can't
-  self-report on.
+  run) — one file plus a model-weights folder. Weights stay separate either way, same as
+  every other local-LLM tool (Ollama, LM Studio) — swappable without a rebuild.
+- **Multi-camera fan-out**: one camera per detector today; generalize to N.
+- **Service supervision**: watchdog that pages the admin if the local machine goes
+  offline — the one failure mode a local-only architecture can't self-report.
 - **Web dashboard + cloud backend**: status visibility and config changes without
-  touching the config file directly (see Architecture diagram).
-- **USB-triggered physical alarm/beacon**: an additional local alert channel beyond
-  speakers and phone notifications.
+  touching the file directly.
+- **USB-triggered physical alarm/beacon**: local alert channel beyond speakers and phone.
