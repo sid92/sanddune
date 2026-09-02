@@ -1,0 +1,140 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"gopkg.in/yaml.v3"
+)
+
+func exeDir() string {
+	exe, err := os.Executable()
+	if err == nil {
+		if resolved, err2 := filepath.EvalSymlinks(exe); err2 == nil {
+			exe = resolved
+		}
+		return filepath.Dir(exe)
+	}
+	wd, _ := os.Getwd()
+	return wd
+}
+
+var (
+	projectRoot = exeDir()
+	configPath  = filepath.Join(projectRoot, "config.yaml")
+	stateDir    = filepath.Join(projectRoot, "state")
+	promptsDir  = filepath.Join(projectRoot, "prompts")
+)
+
+type ScheduleConfig struct {
+	Day             string `yaml:"day"` // e.g. "monday"
+	WindowStartHour int    `yaml:"window_start_hour"`
+	DeadlineHour    int    `yaml:"deadline_hour"`
+}
+
+type TankDetectorConfig struct {
+	Enabled              bool           `yaml:"enabled"`
+	RTSPURL              string         `yaml:"rtsp_url"`
+	Schedule             ScheduleConfig `yaml:"schedule"`
+	CheckIntervalSeconds int            `yaml:"check_interval_seconds"`
+}
+
+type TwilioConfig struct {
+	AccountSID string `yaml:"account_sid"`
+	AuthToken  string `yaml:"auth_token"`
+	FromNumber string `yaml:"from_number"`
+	Channel    string `yaml:"channel"` // "sms" or "whatsapp"
+}
+
+type NotificationsConfig struct {
+	PhoneNumber string       `yaml:"phone_number"`
+	Twilio      TwilioConfig `yaml:"twilio"`
+}
+
+type ModelConfig struct {
+	Path       string `yaml:"path"`
+	MmprojPath string `yaml:"mmproj_path"`
+}
+
+type LocalAlarmConfig struct {
+	Enabled     bool `yaml:"enabled"`
+	RepeatCount int  `yaml:"repeat_count"`
+}
+
+type Config struct {
+	Detectors struct {
+		TankReplenish TankDetectorConfig `yaml:"tank_replenish"`
+	} `yaml:"detectors"`
+	Notifications NotificationsConfig `yaml:"notifications"`
+	Model         ModelConfig         `yaml:"model"`
+	LocalAlarm    LocalAlarmConfig    `yaml:"local_alarm"`
+}
+
+var dayNameToIndex = map[string]int{
+	"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+	"friday": 4, "saturday": 5, "sunday": 6,
+}
+
+func (s ScheduleConfig) DayIndex() int {
+	if i, ok := dayNameToIndex[normalizeDay(s.Day)]; ok {
+		return i
+	}
+	return 0
+}
+
+func normalizeDay(d string) string {
+	out := make([]byte, 0, len(d))
+	for i := 0; i < len(d); i++ {
+		c := d[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}
+
+// loadConfig re-reads config.yaml fresh each call so the running service
+// always reflects the latest saved file without needing a restart.
+func loadConfig() (*Config, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", configPath, err)
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", configPath, err)
+	}
+
+	// sane defaults
+	if cfg.Detectors.TankReplenish.CheckIntervalSeconds == 0 {
+		cfg.Detectors.TankReplenish.CheckIntervalSeconds = 10
+	}
+	if cfg.Detectors.TankReplenish.Schedule.Day == "" {
+		cfg.Detectors.TankReplenish.Schedule.Day = "monday"
+	}
+	if cfg.Notifications.Twilio.Channel == "" {
+		cfg.Notifications.Twilio.Channel = "sms"
+	}
+	if cfg.Model.Path == "" {
+		cfg.Model.Path = "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"
+	}
+	if cfg.Model.MmprojPath == "" {
+		cfg.Model.MmprojPath = "gguf/v35/mmproj-OpenGVLab_InternVL3_5-2B-f16.gguf"
+	}
+	if cfg.LocalAlarm.RepeatCount == 0 {
+		cfg.LocalAlarm.RepeatCount = 3
+	}
+
+	// Resolve relative model paths against the project root, not whatever
+	// the process's current working directory happens to be.
+	if !filepath.IsAbs(cfg.Model.Path) {
+		cfg.Model.Path = filepath.Join(projectRoot, cfg.Model.Path)
+	}
+	if !filepath.IsAbs(cfg.Model.MmprojPath) {
+		cfg.Model.MmprojPath = filepath.Join(projectRoot, cfg.Model.MmprojPath)
+	}
+
+	return &cfg, nil
+}

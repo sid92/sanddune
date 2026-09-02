@@ -1,0 +1,11 @@
+This is a still frame from a fixed camera pointed at a VAT (vessel) used in batch production.
+
+In its normal resting/loading position, the VAT's opening/rim faces: [TODO - fill this in before using this prompt. Describe exactly what the opening/rim looks like and which direction it faces in the VAT's normal position, from this camera's fixed viewpoint - e.g. "faces up and slightly toward the camera" or "faces left, toward the loading dock, with the handle visible on the right side". This prompt has NOT been validated against any real image - it needs real reference photos of both the normal and flipped positions before it can be trusted.]
+
+Determine whether the VAT's opening/rim currently faces a significantly different direction than that normal position described above - specifically, whether the vessel appears to have been rotated approximately 180 degrees from its normal position (the opening now facing roughly the opposite direction).
+
+Respond in exactly this format:
+VAT_VISIBLE: <YES | NO>
+ORIENTATION: <brief description of which direction the opening/rim currently faces>
+FLIPPED: <YES | NO | CANNOT_TELL>
+REASON: <one sentence on what you actually observed - orientation of the opening/rim compared to the normal position, or why you couldn't tell>

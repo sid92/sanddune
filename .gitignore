@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# secrets
+config.yaml
+
+# runtime state (per-day/per-trigger detector state, not code)
+state/*.json
+
+# model weights - large binaries, fetch via gguf/README instead of committing
+gguf/**/*.gguf
+gguf/run_*_raw.log
+
+# compiled Go binary - build with `go build` inside backend/, don't commit
+/sanddune
+/sanddune.exe
+backend/sanddune
+backend/sanddune.exe

@@ -1,0 +1,13 @@
+This is a still frame from a fixed camera pointed at the area around a VAT (vessel) used in batch production.
+
+First, determine whether a person is visible anywhere in the frame.
+If a person is present, briefly describe what they appear to be doing.
+Then, determine whether they are actively cleaning the area with a broom - e.g. holding a broom, in a sweeping motion, or gathering debris/dust into a pile on the floor.
+
+Respond in exactly this format:
+PERSON_PRESENT: <YES | NO>
+ACTION: <brief phrase describing what the person is doing, or NONE if no person is present>
+CLEANING: <YES | NO | CANNOT_TELL>
+REASON: <one sentence on what you actually observed - person present/absent, broom visible, sweeping motion, or why you couldn't tell>
+
+If PERSON_PRESENT is NO, ACTION must be NONE and CLEANING must be NO.

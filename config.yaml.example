@@ -1,0 +1,28 @@
+# Copy this file to config.yaml and fill in real values.
+# config.yaml is gitignored - it will contain your Twilio auth token, a secret.
+
+detectors:
+  tank_replenish:
+    enabled: true
+    rtsp_url: "rtsp://user:pass@camera-ip:554/stream"
+    schedule:
+      day: monday              # monday..sunday
+      window_start_hour: 7     # 24h clock
+      deadline_hour: 14        # 24h clock - alert fires if not resolved by this hour
+    check_interval_seconds: 10 # how often to sample the camera during the window
+
+notifications:
+  phone_number: "+91XXXXXXXXXX"
+  twilio:
+    account_sid: ""
+    auth_token: ""
+    from_number: ""
+    channel: sms              # sms or whatsapp
+
+model:
+  path: "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"
+  mmproj_path: "gguf/v35/mmproj-OpenGVLab_InternVL3_5-2B-f16.gguf"
+
+local_alarm:
+  enabled: true
+  repeat_count: 3            # how many times to speak the alert out loud (macOS `say`)

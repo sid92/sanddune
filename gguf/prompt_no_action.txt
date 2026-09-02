@@ -1,0 +1,13 @@
+This is a still frame from a fixed camera pointed at a water tank. Frames are captured every 5 seconds; you are only judging this single frame.
+
+First, determine whether a person is visible anywhere in the frame.
+Then, only if a person is present, determine whether they are actively pouring water from a bucket or jug into the tank - e.g. holding, lifting, or tipping a bucket/jug near the tank opening, with water visibly flowing or about to flow into the tank.
+
+Do NOT try to judge the water level or contents inside the tank - it is not visible to the camera. Only judge whether a person is present and whether they are pouring.
+
+Respond in exactly this format:
+PERSON_PRESENT: <YES | NO>
+POURING: <YES | NO | CANNOT_TELL>
+REASON: <one sentence on what you actually observed - person present/absent, bucket/jug position, water visibly flowing, or why you couldn't tell>
+
+If PERSON_PRESENT is NO, POURING must be NO.
