@@ -118,6 +118,48 @@ test data.
 | **Detection** | Local zero-shot VLM (InternVL3.5-2B) | Fine-tuned local VLM (~1B, LoRA) once labeled data exists |
 | **Actions** | Twilio SMS/WhatsApp to one number; local speaker alarm (tone + spoken message x3) | USB-triggered physical alarm/beacon; web dashboard for status + config; cloud backend for notification routing; watchdog for machine-down alerts |
 
+## Objects and crops
+
+A rule can require the same action on several objects ("both tanks must be refilled").
+Each **(object, action) pair is a separate inference call** — never one call asked to
+report on every object at once. This keeps prompts single-object, keeps the `KEY: VALUE`
+parsing unchanged, and makes object identity come from the loop rather than from model
+output.
+
+**Objects are located by static pixel crops.** Two alternatives were considered and
+rejected for now:
+
+- *VLM spatial scoping* ("consider only the left tank, ignore the other") — models are
+  weak at this, and it puts object identity inside model output where it can't be trusted.
+- *A detection/segmentation model* to derive boxes per frame — solves camera drift and
+  scales past a handful of objects, but adds a second model and a new failure mode to
+  solve a problem not yet demonstrated. Revisit if drift or object count becomes real.
+
+**A crop is an action region, not an object bounding box.** The evidence for "refilling"
+(the person, the raised jug, the pour) sits above and around the tank, not inside a tight
+box drawn on it. Crops must include headroom for a raised jug and wherever the operator
+stands. Padding is anisotropic — mostly upward, modestly sideways.
+
+Two constraints pull against each other: too tight and the action falls outside the crop;
+too wide and the crop catches the neighbouring tank, which risks marking an *untouched*
+tank as done. That is the dangerous direction, since only a positive resolves a window.
+
+**Crop coordinates are set once, by eye, and stored in config.** There is deliberately no
+GUI (see Roadmap). The setup loop is: operator describes the region roughly → render the
+crop → operator confirms or corrects → repeat. Two or three rounds converge, and no
+interface is needed.
+
+Verify against a frame with a **refill actually in progress**, not an empty scene. An empty
+crop only proves the tank is in view; it cannot show whether the operator and jug land
+inside the box. If no such frame exists, have someone mime a pour at each tank and grab one.
+
+**Assumption: camera and tanks stay put.** If the camera is nudged, crops keep working but
+point at the wrong patch — the detector then reports "not done" forever and alarms every
+week with nothing indicating why. Mitigation: persist the crop used for each decision
+alongside the parsed fields, so "why didn't it fire" is answered by looking at what the
+model actually saw. Those saved crops double as real labelled frames for a representative
+eval set and for the LoRA work below.
+
 ## Configuration
 
 Copy `config.yaml.example` to `config.yaml` and fill in real values. `config.yaml` is
