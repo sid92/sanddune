@@ -34,12 +34,19 @@ type ScheduleConfig struct {
 	DeadlineHour    int    `yaml:"deadline_hour"`
 }
 
-// CaptureConfig controls image prep before inference. Crop happens first
+// CaptureConfig controls image prep before inference. AspectFixWidthScale
+// corrects cameras that transmit anamorphic frames without SAR/DAR metadata
+// to say so (seen on a Hikvision channel in "1080P Lite" mode: transmits
+// 960x1080 - half horizontal resolution to save bandwidth - with no stream
+// metadata indicating it should be displayed stretched 2x wide). Applied
+// BEFORE crop, so crop coordinates are set against correctly-proportioned
+// images. 0 or 1 = no correction (the common case). Crop happens next
 // (per-object, see ObjectConfig), then MaxEdgePx caps the crop's long edge -
 // only ever downscales, never upscales.
 type CaptureConfig struct {
-	MaxEdgePx int    `yaml:"max_edge_px"`
-	Scaler    string `yaml:"scaler"` // ffmpeg scale flag, e.g. "bicubic"
+	AspectFixWidthScale float64 `yaml:"aspect_fix_width_scale"`
+	MaxEdgePx           int     `yaml:"max_edge_px"`
+	Scaler              string  `yaml:"scaler"` // ffmpeg scale flag, e.g. "bicubic"
 }
 
 // ResolveCondition is one {field, equals} check against the model's parsed

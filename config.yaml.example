@@ -12,6 +12,12 @@ detectors:
     check_interval_seconds: 10 # how often to sample the camera during the window
 
     capture:
+      # aspect_fix_width_scale: 2.0  # only needed for cameras that transmit anamorphic
+                                      # frames without saying so (e.g. Hikvision "1080P
+                                      # Lite" mode - half-width transmit, meant to be
+                                      # displayed stretched). Check a raw frame against
+                                      # real proportions before setting this. Default 0
+                                      # (no correction) is right for most cameras.
       max_edge_px: 448          # fixed - crop happens first, this only caps the crop's
                                  # long edge, never upscales
       scaler: bicubic

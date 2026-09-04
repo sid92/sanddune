@@ -1,4 +1,4 @@
-Is there a person pouring something into the tank from the top?
+Is the tank open and is water being poured into it from the top?
 
 Respond in exactly this format:
 POURING: <YES | NO>

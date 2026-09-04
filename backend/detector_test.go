@@ -42,7 +42,12 @@ func findDesktopPouringImage(t *testing.T) string {
 }
 
 func TestTankCheckAgainstValidatedImages(t *testing.T) {
-	notPouringImage := filepath.Join(projectRoot, "test_images", "img01.jpg") // person painting a barrel
+	// img01 (painting a barrel) is deliberately NOT used here - it's the one
+	// known image that flips to a false positive at the 448px capture cap
+	// (see README "Validation status"), which the default/no-crop path now
+	// applies. Using it here would confound "did the refactor break
+	// something" with "the already-documented 448px tradeoff fired again".
+	notPouringImage := filepath.Join(projectRoot, "test_images", "img04.jpg") // person standing idle by tank
 
 	cfg, err := loadConfig()
 	if err != nil {

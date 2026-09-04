@@ -161,6 +161,17 @@ Two constraints pull against each other: too tight and the action falls outside 
 too wide and the crop catches the neighbouring tank, which risks marking an *untouched*
 tank as done. That is the dangerous direction, since only a positive resolves a window.
 
+**Before calibrating any crop, check the frame's proportions are actually correct.** A
+real Hikvision channel we tested against transmits "1080P Lite" - half horizontal
+resolution (960x1080 instead of 1920x1080) with no stream metadata saying so, so it
+silently looks squeezed. Crop coordinates set against a wrongly-proportioned frame are
+wrong. `backend/cmd/cameracheck` automates this check for any new camera: probes the
+RTSP stream's dimensions, optionally queries Hikvision ISAPI for the configured mode,
+flags likely anamorphic streams, and saves a raw + corrected preview to eyeball. Run it
+first, and if it flags a problem, set `capture.aspect_fix_width_scale` in config.yaml
+before doing anything else (applied by `grabFrame` before crop, so crop coordinates
+should always be set against the corrected image).
+
 **Crop coordinates are set once, by eye, and stored in config.** There is deliberately no
 GUI (see Roadmap). The setup loop is: operator describes the region roughly → render the
 crop → operator confirms or corrects → repeat. Two or three rounds converge, and no

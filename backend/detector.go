@@ -65,7 +65,7 @@ func runTankCheck(cfg *Config, now time.Time, imageOverride string) (map[string]
 			if err != nil {
 				return nil, err
 			}
-			if err := grabFrame(det.RTSPURL, frame); err != nil {
+			if err := grabFrame(det.RTSPURL, frame, det.Capture.AspectFixWidthScale); err != nil {
 				return nil, err
 			}
 		}

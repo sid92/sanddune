@@ -9,9 +9,9 @@ import (
 )
 
 // grabFrame pulls a single current frame from an RTSP stream using ffmpeg
-// and writes it as a JPEG to savePath. NOT YET TESTED against a real camera -
-// no RTSP source has been available in this environment to validate against.
-func grabFrame(rtspURL, savePath string) error {
+// and writes it as a JPEG to savePath. If aspectFixWidthScale > 1, the frame
+// is stretched horizontally by that factor first - see CaptureConfig.
+func grabFrame(rtspURL, savePath string, aspectFixWidthScale float64) error {
 	if rtspURL == "" || rtspURL == "TBD" {
 		return fmt.Errorf("RTSP URL not configured (still 'TBD') - set it before grabbing a frame")
 	}
@@ -19,14 +19,19 @@ func grabFrame(rtspURL, savePath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ffmpeg",
+	args := []string{
 		"-y",
 		"-rtsp_transport", "tcp",
 		"-i", rtspURL,
 		"-frames:v", "1",
 		"-q:v", "2",
-		savePath,
-	)
+	}
+	if aspectFixWidthScale > 1 {
+		args = append(args, "-vf", fmt.Sprintf("scale=iw*%g:ih", aspectFixWidthScale))
+	}
+	args = append(args, savePath)
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
