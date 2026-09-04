@@ -100,6 +100,13 @@ func TestTankCheckAgainstValidatedImages(t *testing.T) {
 		os.Remove(filepath.Join(stateDir, tankStateName+".json"))
 		cfg2 := *cfg
 		cfg2.Detectors.TankReplenish.Schedule.DeadlineHour = 0 // already past
+		// This path calls the real sendNotification - blank out credentials
+		// unconditionally so this test can NEVER fire a live message, no
+		// matter what real secrets are sitting in the ambient config.yaml.
+		// (Learned the hard way: a real Telegram message went out from a
+		// routine `go test` run once real credentials were saved locally.)
+		cfg2.Notifications.Telegram = TelegramConfig{}
+		cfg2.LocalAlarm.Enabled = false // same reasoning - don't fire a real speaker alarm either
 		lateSameDay := time.Date(2026, 8, 31, 15, 0, 0, 0, time.Local)
 		result, err := runTankCheck(&cfg2, lateSameDay, notPouringImage)
 		if err != nil {
