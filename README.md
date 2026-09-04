@@ -87,28 +87,36 @@ pages anyone. That's the Watchdog box — future work, not solved today.
   this same image identically, pointing at pixel information lost in the downscale, not
   prompt wording.
 
-- Real camera, real crops: connected to the actual deployment camera (Hikvision DVR,
-  channel showing the two-tank room). Found and fixed a real bug there - the channel
-  transmits "1080P Lite" mode (half horizontal resolution, no metadata saying so), which
-  would have made every crop coordinate wrong. `backend/cmd/cameracheck` now catches this
-  automatically for any camera. Both tank crops calibrated against corrected-proportion
-  frames and validated 4/4 (each object x a real positive and a real negative) with the
-  current prompt - ~1.2-1.3s per crop on Mac at a fixed 4 threads (confirmed from
-  llama.cpp's own log, not just trusted from the flag). Notably, `tank_far`'s "positive"
-  frame has the operator visible in-shot (shared space between the two tanks) but no
-  water going into that specific tank, and the model correctly still said NO - a real
-  hard-negative pass, not just an easy case.
-- Multi-object resolution (`require: all` across two real objects, not synthetic ones) -
-  exercised via the crop test above, both objects tracked independently in state.
+- Real camera connected: the actual deployment camera (Hikvision DVR, channel showing
+  the two-tank room). Found and fixed a real bug there - the channel transmits "1080P
+  Lite" mode (half horizontal resolution, no metadata saying so), which would have made
+  every crop coordinate wrong. `backend/cmd/cameracheck` now catches this automatically
+  for any camera - confirmed independently on both Mac and the Windows box.
+- Telegram notification: real message sent from the actual code path (bot token + chat
+  ID from `getUpdates`) and confirmed received.
+- Multi-object resolution (`require: all` across two objects) - state machine exercised
+  end-to-end, both objects tracked independently.
+- Windows crop-pipeline timing measured: ~62s for a full 2-object cycle (vs ~4.7 min/frame
+  full-resolution single-object) - crop+448 is a real ~6x win there, but the absolute
+  number is nowhere near the Mac's ~1.2-1.3s/crop (~25x slower hardware). ~17-19s of
+  *each* call is model reload, since the CLI respawns per object - this cost multiplies
+  with object count, which is why a resident-model (`llama-server`) rework is now a real
+  priority rather than a nice-to-have, especially for cameras with more than 2 objects.
+  `check_interval_seconds: 10` is not achievable on that hardware as currently built.
+
+**Known-wrong, needs redoing:**
+- **The tank_near/tank_far crop coordinates are confirmed incorrect.** Caught by
+  rendering them against a real (not synthesized) empty frame: `tank_near`'s box was wide
+  enough to contain *both* cylindrical tanks (a pour at either would incorrectly resolve
+  both objects), and `tank_far`'s box mostly framed bare wall with the tank clipped at
+  the edge. New candidate coordinates exist but are unconfirmed. The two tanks sit
+  immediately adjacent to each other, so any box with enough headroom for one tank's
+  operator risks clipping into the neighbor's space - this can't be fully resolved
+  without a real (or synthesized) pour in progress at *each* tank individually, to check
+  for cross-contamination between the two crops. That's now a blocking requirement for
+  finishing crop calibration, not a nice-to-have.
 
 **Not yet field-tested:**
-- Windows hardware timing on the new crop pipeline - full-frame timing on that box is
-  known (~4.7 min/frame, see above); crop+448 should cut that drastically the same way
-  it did on Mac, but hasn't been re-measured there yet.
-- Telegram notification: implemented directly against the Bot API, not yet sent against
-  a real bot/chat.
-- `tank_far` has no positive example of its own (a real or synthesized pour into it) -
-  only validated as a correct negative so far, including with the operator in-frame.
 - Event-triggered detector (VAT/batch-change): state machine unit-tested against a
   mocked model in Python, not ported to the Go service. Prompts are first drafts.
 - Our original 8-image stock test set is still weak (only one real hard negative, no
