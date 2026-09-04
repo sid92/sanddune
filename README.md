@@ -104,17 +104,20 @@ pages anyone. That's the Watchdog box — future work, not solved today.
   priority rather than a nice-to-have, especially for cameras with more than 2 objects.
   `check_interval_seconds: 10` is not achievable on that hardware as currently built.
 
-**Known-wrong, needs redoing:**
-- **The tank_near/tank_far crop coordinates are confirmed incorrect.** Caught by
-  rendering them against a real (not synthesized) empty frame: `tank_near`'s box was wide
-  enough to contain *both* cylindrical tanks (a pour at either would incorrectly resolve
-  both objects), and `tank_far`'s box mostly framed bare wall with the tank clipped at
-  the edge. New candidate coordinates exist but are unconfirmed. The two tanks sit
-  immediately adjacent to each other, so any box with enough headroom for one tank's
-  operator risks clipping into the neighbor's space - this can't be fully resolved
-  without a real (or synthesized) pour in progress at *each* tank individually, to check
-  for cross-contamination between the two crops. That's now a blocking requirement for
-  finishing crop calibration, not a nice-to-have.
+**Crop coordinates: corrected once, still unconfirmed:**
+- An earlier `tank_near` box (my own widened substitution, not Sid's) was confirmed
+  wrong - wide enough to span *both* tanks, so a pour at either would have incorrectly
+  resolved both objects. `config.yaml` now uses Sid's exact coordinates instead, read
+  directly off a gridded 1920x1080 reference frame (`tank_near: [1100,0,400,1000]`,
+  `tank_far: [1500,0,400,1000]`).
+- These still aren't fully trustworthy. With the person-agnostic prompt, a test against
+  this exact `tank_near` box on the synthesized positive image returned `POURING: NO` -
+  the box may be too tight and clip the actual water/opening, not just the operator.
+  `tank_far` has no positive example of its own at all. The two tanks sit immediately
+  adjacent, so any box with enough headroom for one tank's pour risks clipping into the
+  neighbor's space either way. Resolving this needs a real or synthesized pour-in-progress
+  photo at **each** tank individually - blocking for finishing crop calibration, not a
+  nice-to-have.
 
 **Not yet field-tested:**
 - Event-triggered detector (VAT/batch-change): state machine unit-tested against a
