@@ -66,30 +66,45 @@ pages anyone. That's the Watchdog box — future work, not solved today.
 ## Validation status
 
 **Verified:**
-- Model + prompt: 10/10 on a curated test set — positive, negative, and adversarial
-  cases (e.g. person pouring water but not into the tank). 200/200 identical outputs
-  across repeated runs at temp=0. Compared two model generations and two quantization
-  levels before settling on the current config.
-- Tank replenishment detector: full state machine (deadline tracking, single-fire
-  notification, day/window gating) tested end-to-end via Go integration tests
+- Detector state machine: deadline tracking, single-fire notification, day/window
+  gating, per-object resolution — tested end-to-end via Go integration tests
   (`backend/detector_test.go`) against the real inference pipeline.
 - Build: compiles natively on macOS, cross-compiles to Windows.
 - Windows hardware test: ran the same integration tests on a real Windows box (Intel
-  Core i3-6100, 2 cores/4 threads, 8GB RAM, no GPU). Output was correct — matched
-  ground truth exactly — but took ~4.7 minutes per frame, dominated by vision encoding
-  (~123s). That's a hardware ceiling on this specific CPU, not a bug: the vision
-  encoder is the same size regardless of model/quant choice, so it doesn't shrink with
-  a smaller model. Exposed a real bug this same run caught: `runVLM`'s inference
-  timeout was hardcoded to 120s, shorter than vision encoding alone took here - now
-  configurable (`model.timeout_seconds`, `model.threads`) instead of hardcoded.
+  Core i3-6100, 2 cores/4 threads, 8GB RAM, no GPU). Output was correct, but took
+  ~4.7 min/frame at full resolution, dominated by vision encoding (~123s) - a hardware
+  ceiling on this CPU, not a bug (the vision encoder is the same size regardless of
+  model/quant choice). Two real fixes came out of that run: `runVLM`'s timeout was
+  hardcoded to 120s, shorter than vision encoding alone took there, now configurable
+  (`model.timeout_seconds`, `model.threads`); and `-t 4` cut total time ~31% (this chip
+  is memory-latency-bound, not core-bound - threading helps more than expected).
+- 448px capture cap: ~5.3x faster (image tokens are the actual bottleneck - one full-res
+  frame is ~3,400 tokens, ~163s of prefill alone). Tradeoff found in the same test: one
+  image (a person painting a barrel, not pouring) flipped to a false positive at 448 -
+  the model lost a small object (a paintbrush) it correctly saw at full resolution.
+  False positives are the dangerous direction here (only `POURING: YES` resolves an
+  object), so 448 is not free precision-wise. Two structurally different prompts failed
+  this same image identically, pointing at pixel information lost in the downscale, not
+  prompt wording.
 
-**Not yet field-tested:**
+**Not yet field-tested (all new as of the multi-object/crop rework):**
+- The current prompt (single `POURING: YES/NO` field) has not been through the same
+  repeated-run validation the earlier, more detailed prompt was - that earlier result
+  doesn't carry over automatically to a different prompt.
+- Static pixel crops: the crop/scale pipeline works mechanically (verified against test
+  images), but no real crop coordinates exist yet - they get set by eye against an
+  actual camera frame, ideally one with a refill in progress, which we don't have.
+- Multi-object resolution (`require: all`/`any` across more than one object) - logic is
+  implemented, not yet exercised against more than one real object.
 - Event-triggered detector (VAT/batch-change): state machine unit-tested against a
-  mocked model. Prompts are first drafts — need real reference photos from the target
-  cameras before the same validation pass the tank detector went through.
+  mocked model in Python, not ported to the Go service. Prompts are first drafts.
 - RTSP capture and Twilio notification: implemented directly against each API, tested
   against bad URLs and missing credentials for graceful failure. Not yet run against a
-  live camera or live Twilio account.
+  live camera or live Twilio account - no camera has been reachable from either dev
+  machine so far.
+- Our 8-image stock test set is weak: only one real hard negative, and none of the
+  images show the actual target scene (an outdoor water tank). Treat any pass/fail
+  result against it as low-confidence until real camera footage exists.
 
 ## Model approach
 
@@ -99,9 +114,11 @@ Running **InternVL3.5-2B**, quantized to **Q4_K_M** (~1.2GB) via `llama.cpp`, ze
 - The previous generation (InternVL3, non-3.5) failed the test set at any quantization
   level. InternVL3.5-2B passed cleanly at the same quantization — the gap was the
   training recipe, not precision.
-- Prompt wording mattered more than model size: adding a "what is the person doing"
-  field before the yes/no answer improved accuracy on ambiguous frames, reproducibly
-  across 10 repeated runs both ways.
+- Earlier prompt iteration found wording mattered more than model size: adding a "what
+  is the person doing" field before the yes/no answer improved accuracy on ambiguous
+  frames. The current production prompt has since been simplified to a single
+  `POURING: YES/NO` question and hasn't been through that same repeated-run validation
+  yet — see [Validation status](#validation-status).
 
 **Next**: fine-tune a smaller (~1B) InternVL checkpoint via LoRA once there's a real
 bank of labeled footage from the deployed cameras — collect real frames (50-200+ per
@@ -176,6 +193,24 @@ detectors:
       deadline_hour: 14
     check_interval_seconds: 10
 
+    capture:
+      max_edge_px: 448   # fixed - crop first, then cap the long edge, never upscale
+      scaler: bicubic
+
+    action:
+      prompt: prompts/tank_pouring.txt
+      resolve_when:
+        - field: POURING
+          equals: YES
+
+    objects:              # omit entirely for a single tank (full frame, no crop)
+      - id: tank_left
+        crop: [0, 0, 0, 0] # [x, y, w, h] - action region, set by eye against a real frame
+      - id: tank_right
+        crop: [0, 0, 0, 0]
+
+    require: all          # all | any
+
 notifications:
   phone_number: "+91XXXXXXXXXX"
   twilio:
@@ -187,6 +222,8 @@ notifications:
 model:
   path: "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"
   mmproj_path: "gguf/v35/mmproj-OpenGVLab_InternVL3_5-2B-f16.gguf"
+  threads: 0           # 0 = auto-detect; set explicitly on weak CPUs
+  timeout_seconds: 300  # raise on slow/CPU-only hardware
 
 local_alarm:
   enabled: true

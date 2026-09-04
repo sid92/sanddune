@@ -11,6 +11,31 @@ detectors:
       deadline_hour: 14        # 24h clock - alert fires if not resolved by this hour
     check_interval_seconds: 10 # how often to sample the camera during the window
 
+    capture:
+      max_edge_px: 448          # fixed - crop happens first, this only caps the crop's
+                                 # long edge, never upscales
+      scaler: bicubic
+
+    action:
+      prompt: prompts/tank_pouring.txt
+      resolve_when:
+        - field: POURING
+          equals: YES
+
+    # One inference call per object per check. Omit this list entirely for a
+    # single-tank setup (uses the full frame, no crop). Crop is [x, y, w, h]
+    # in source-frame pixels - an ACTION region (room for the operator and a
+    # raised jug above the tank), not a tight box on the tank itself. Set by
+    # eye against a real frame with a refill actually in progress; see
+    # README "Objects and crops". All-zero crop = full frame for that object.
+    objects:
+      - id: tank_left
+        crop: [0, 0, 0, 0]   # placeholder - not yet calibrated against a real frame
+      - id: tank_right
+        crop: [0, 0, 0, 0]
+
+    require: all   # all | any - whether every object or just one must resolve
+
 notifications:
   phone_number: "+91XXXXXXXXXX"
   twilio:
@@ -22,9 +47,9 @@ notifications:
 model:
   path: "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"
   mmproj_path: "gguf/v35/mmproj-OpenGVLab_InternVL3_5-2B-f16.gguf"
-  threads: 0                # 0 = let llama.cpp auto-detect; set explicitly on weak CPUs
-  timeout_seconds: 300       # per-check timeout; raise on slow/CPU-only hardware -
-                             # vision encoding alone can take well over a minute there
+  threads: 0                 # 0 = let llama.cpp auto-detect; set explicitly on weak CPUs
+  timeout_seconds: 300        # per-check timeout; raise on slow/CPU-only hardware -
+                              # vision encoding alone can take well over a minute there
 
 local_alarm:
   enabled: true

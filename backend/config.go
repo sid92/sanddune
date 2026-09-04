@@ -25,6 +25,7 @@ var (
 	configPath  = filepath.Join(projectRoot, "config.yaml")
 	stateDir    = filepath.Join(projectRoot, "state")
 	promptsDir  = filepath.Join(projectRoot, "prompts")
+	cropsDir    = filepath.Join(stateDir, "crops")
 )
 
 type ScheduleConfig struct {
@@ -33,11 +34,61 @@ type ScheduleConfig struct {
 	DeadlineHour    int    `yaml:"deadline_hour"`
 }
 
+// CaptureConfig controls image prep before inference. Crop happens first
+// (per-object, see ObjectConfig), then MaxEdgePx caps the crop's long edge -
+// only ever downscales, never upscales.
+type CaptureConfig struct {
+	MaxEdgePx int    `yaml:"max_edge_px"`
+	Scaler    string `yaml:"scaler"` // ffmpeg scale flag, e.g. "bicubic"
+}
+
+// ResolveCondition is one {field, equals} check against the model's parsed
+// KEY: VALUE output. An object's action resolves when ALL conditions in
+// ActionConfig.ResolveWhen are true - data-driven, so the code never
+// references specific field names like PERSON_PRESENT or POURING directly.
+type ResolveCondition struct {
+	Field  string `yaml:"field"`
+	Equals string `yaml:"equals"`
+}
+
+type ActionConfig struct {
+	Prompt      string             `yaml:"prompt"`
+	ResolveWhen []ResolveCondition `yaml:"resolve_when"`
+}
+
+// ObjectConfig is one target within a detector (e.g. one tank). Crop is a
+// static pixel action-region [x, y, w, h] in the source frame - deliberately
+// not a tight bounding box on the object itself, see README "Objects and
+// crops". An all-zero crop means "use the full frame" (no crop configured
+// yet, or genuinely not needed).
+type ObjectConfig struct {
+	ID   string `yaml:"id"`
+	Crop [4]int `yaml:"crop"`
+}
+
+func (o ObjectConfig) hasCrop() bool {
+	return o.Crop != [4]int{0, 0, 0, 0}
+}
+
 type TankDetectorConfig struct {
 	Enabled              bool           `yaml:"enabled"`
 	RTSPURL              string         `yaml:"rtsp_url"`
 	Schedule             ScheduleConfig `yaml:"schedule"`
 	CheckIntervalSeconds int            `yaml:"check_interval_seconds"`
+	Capture              CaptureConfig  `yaml:"capture"`
+	Action               ActionConfig   `yaml:"action"`
+	Objects              []ObjectConfig `yaml:"objects"`
+	Require              string         `yaml:"require"` // "all" or "any"
+}
+
+// objectsOrDefault returns the configured objects, or a single synthetic
+// "default" object (full frame, no crop) if none are configured - keeps a
+// simple single-tank config working without requiring an objects list.
+func (d TankDetectorConfig) objectsOrDefault() []ObjectConfig {
+	if len(d.Objects) > 0 {
+		return d.Objects
+	}
+	return []ObjectConfig{{ID: "default"}}
 }
 
 type TwilioConfig struct {
@@ -116,6 +167,18 @@ func loadConfig() (*Config, error) {
 	if cfg.Detectors.TankReplenish.Schedule.Day == "" {
 		cfg.Detectors.TankReplenish.Schedule.Day = "monday"
 	}
+	if cfg.Detectors.TankReplenish.Action.Prompt == "" {
+		cfg.Detectors.TankReplenish.Action.Prompt = filepath.Join(promptsDir, "tank_pouring.txt")
+	}
+	if len(cfg.Detectors.TankReplenish.Action.ResolveWhen) == 0 {
+		cfg.Detectors.TankReplenish.Action.ResolveWhen = []ResolveCondition{{Field: "POURING", Equals: "YES"}}
+	}
+	if cfg.Detectors.TankReplenish.Require == "" {
+		cfg.Detectors.TankReplenish.Require = "all"
+	}
+	if cfg.Detectors.TankReplenish.Capture.MaxEdgePx == 0 {
+		cfg.Detectors.TankReplenish.Capture.MaxEdgePx = 448
+	}
 	if cfg.Notifications.Twilio.Channel == "" {
 		cfg.Notifications.Twilio.Channel = "sms"
 	}
@@ -135,13 +198,16 @@ func loadConfig() (*Config, error) {
 		cfg.Model.TimeoutSeconds = 300
 	}
 
-	// Resolve relative model paths against the project root, not whatever
-	// the process's current working directory happens to be.
+	// Resolve relative paths against the project root, not whatever the
+	// process's current working directory happens to be.
 	if !filepath.IsAbs(cfg.Model.Path) {
 		cfg.Model.Path = filepath.Join(projectRoot, cfg.Model.Path)
 	}
 	if !filepath.IsAbs(cfg.Model.MmprojPath) {
 		cfg.Model.MmprojPath = filepath.Join(projectRoot, cfg.Model.MmprojPath)
+	}
+	if !filepath.IsAbs(cfg.Detectors.TankReplenish.Action.Prompt) {
+		cfg.Detectors.TankReplenish.Action.Prompt = filepath.Join(projectRoot, cfg.Detectors.TankReplenish.Action.Prompt)
 	}
 
 	return &cfg, nil

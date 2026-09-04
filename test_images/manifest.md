@@ -1,5 +1,12 @@
 # Test image manifest (ground truth, not for model input)
 
+NOTE: these labels were set under an older prompt where "any pouring counts" (not
+specifically into a tank). The current production prompt (`prompts/tank_pouring.txt`)
+asks specifically about pouring into the tank, so img07/img08's "expected POURING: YES"
+no longer holds under that prompt - both show pouring into a pot/bottle, not a tank.
+Kept for historical reference to the earlier validation pass; not authoritative for the
+current prompt.
+
 | File | Description | Expected PERSON_PRESENT | Expected POURING |
 |---|---|---|---|
 | img01.jpg | person painting a red barrel, not pouring | YES | NO |
