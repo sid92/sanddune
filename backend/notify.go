@@ -1,55 +1,45 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
-	"strings"
 )
 
-// sendNotification sends via Twilio's REST API directly (Basic Auth + form
-// POST) - no SDK dependency needed. Returns false (dry-run/logged only) if
-// credentials or the destination number aren't configured yet.
+// sendNotification sends via the Telegram Bot API directly (plain HTTPS
+// POST, no SDK dependency) - no auth scheme complexity, unlike Twilio: the
+// bot token is just part of the URL. Returns false (dry-run/logged only) if
+// the bot token or chat ID aren't configured yet.
 func sendNotification(cfg *Config, message string) (bool, error) {
-	sid := cfg.Notifications.Twilio.AccountSID
-	token := cfg.Notifications.Twilio.AuthToken
-	from := cfg.Notifications.Twilio.FromNumber
-	to := cfg.Notifications.PhoneNumber
-	channel := cfg.Notifications.Twilio.Channel
+	token := cfg.Notifications.Telegram.BotToken
+	chatID := cfg.Notifications.Telegram.ChatID
 
-	if sid == "" || token == "" || from == "" || to == "" || to == "TBD" {
-		log.Printf("[DRY RUN - Twilio not configured or phone_number is still unset] Would send %s notification: %s", channel, message)
+	if token == "" || chatID == "" || chatID == "TBD" {
+		log.Printf("[DRY RUN - Telegram not configured (bot_token/chat_id unset)] Would send notification: %s", message)
 		return false, nil
 	}
 
-	if channel == "whatsapp" {
-		from = "whatsapp:" + from
-		to = "whatsapp:" + to
-	}
-
-	return true, twilioSend(sid, token, from, to, message)
+	return true, telegramSend(token, chatID, message)
 }
 
-func twilioSend(sid, token, from, to, body string) error {
-	endpoint := fmt.Sprintf("https://api.twilio.com/2010-04-01/Accounts/%s/Messages.json", sid)
-	form := url.Values{"To": {to}, "From": {from}, "Body": {body}}
+func telegramSend(token, chatID, text string) error {
+	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
+	form := url.Values{"chat_id": {chatID}, "text": {text}}
 
-	req, err := http.NewRequest("POST", endpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(sid, token)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.PostForm(endpoint, form)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("twilio API returned status %d", resp.StatusCode)
+		var body struct {
+			Description string `json:"description"`
+		}
+		json.NewDecoder(resp.Body).Decode(&body)
+		return fmt.Errorf("telegram API returned status %d: %s", resp.StatusCode, body.Description)
 	}
 	return nil
 }

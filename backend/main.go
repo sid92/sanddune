@@ -1,7 +1,7 @@
 // Headless local SOP alarm service. No UI - everything is driven by
 // config.yaml (see config.yaml.example). Samples the configured RTSP
 // camera(s) on an interval, runs each frame through a local InternVL model,
-// and fires a Twilio notification + local speaker alarm if an expected
+// and fires a Telegram notification + local speaker alarm if an expected
 // event hasn't happened by its deadline.
 package main
 

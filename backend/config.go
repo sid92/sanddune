@@ -98,16 +98,13 @@ func (d TankDetectorConfig) objectsOrDefault() []ObjectConfig {
 	return []ObjectConfig{{ID: "default"}}
 }
 
-type TwilioConfig struct {
-	AccountSID string `yaml:"account_sid"`
-	AuthToken  string `yaml:"auth_token"`
-	FromNumber string `yaml:"from_number"`
-	Channel    string `yaml:"channel"` // "sms" or "whatsapp"
+type TelegramConfig struct {
+	BotToken string `yaml:"bot_token"`
+	ChatID   string `yaml:"chat_id"`
 }
 
 type NotificationsConfig struct {
-	PhoneNumber string       `yaml:"phone_number"`
-	Twilio      TwilioConfig `yaml:"twilio"`
+	Telegram TelegramConfig `yaml:"telegram"`
 }
 
 type ModelConfig struct {
@@ -185,9 +182,6 @@ func loadConfig() (*Config, error) {
 	}
 	if cfg.Detectors.TankReplenish.Capture.MaxEdgePx == 0 {
 		cfg.Detectors.TankReplenish.Capture.MaxEdgePx = 448
-	}
-	if cfg.Notifications.Twilio.Channel == "" {
-		cfg.Notifications.Twilio.Channel = "sms"
 	}
 	if cfg.Model.Path == "" {
 		cfg.Model.Path = "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"

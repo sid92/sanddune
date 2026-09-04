@@ -20,7 +20,7 @@ flowchart TD
     VLM -->|not detected yet| D{Deadline reached?}
     D -->|no| S
     D -->|yes, still not detected| A[Fire alert]
-    A --> SMS[Twilio SMS / WhatsApp to admin]
+    A --> SMS[Telegram to admin]
     A --> SPK[Local speaker alarm - tone + spoken message, 3x]
 ```
 
@@ -42,10 +42,10 @@ flowchart LR
       FF[ffmpeg frame grab] --> VLM["llama-mtmd-cli<br/>InternVL3.5-2B, GGUF, Q4_K_M"]
       VLM --> Det[Detector state machine<br/>schedule / window / notified-once logic]
       Cfg[config.yaml] --> Det
-      Det -->|deadline breached| Tw[Twilio REST API<br/>direct HTTPS call, no SDK]
+      Det -->|deadline breached| Tw[Telegram Bot API<br/>direct HTTPS call, no SDK]
       Det -->|deadline breached| Spk["afplay + say (macOS)<br/>local speaker alarm"]
     end
-    Tw --> Admin[Admin's phone<br/>SMS / WhatsApp]
+    Tw --> Admin[Admin's Telegram chat]
 
     subgraph future[Future]
       Dash[Web dashboard + login]
@@ -59,7 +59,7 @@ flowchart LR
     Backend -.-> Watchdog
 ```
 
-Everything runs local, including the Twilio call — no backend service. Simpler, no
+Everything runs local, including the Telegram call — no backend service. Simpler, no
 hosting cost. Tradeoff: if the local machine goes down (crash, power loss), nothing
 pages anyone. That's the Watchdog box — future work, not solved today.
 
@@ -87,24 +87,33 @@ pages anyone. That's the Watchdog box — future work, not solved today.
   this same image identically, pointing at pixel information lost in the downscale, not
   prompt wording.
 
-**Not yet field-tested (all new as of the multi-object/crop rework):**
-- The current prompt (single `POURING: YES/NO` field) has not been through the same
-  repeated-run validation the earlier, more detailed prompt was - that earlier result
-  doesn't carry over automatically to a different prompt.
-- Static pixel crops: the crop/scale pipeline works mechanically (verified against test
-  images), but no real crop coordinates exist yet - they get set by eye against an
-  actual camera frame, ideally one with a refill in progress, which we don't have.
-- Multi-object resolution (`require: all`/`any` across more than one object) - logic is
-  implemented, not yet exercised against more than one real object.
+- Real camera, real crops: connected to the actual deployment camera (Hikvision DVR,
+  channel showing the two-tank room). Found and fixed a real bug there - the channel
+  transmits "1080P Lite" mode (half horizontal resolution, no metadata saying so), which
+  would have made every crop coordinate wrong. `backend/cmd/cameracheck` now catches this
+  automatically for any camera. Both tank crops calibrated against corrected-proportion
+  frames and validated 4/4 (each object x a real positive and a real negative) with the
+  current prompt - ~1.2-1.3s per crop on Mac at a fixed 4 threads (confirmed from
+  llama.cpp's own log, not just trusted from the flag). Notably, `tank_far`'s "positive"
+  frame has the operator visible in-shot (shared space between the two tanks) but no
+  water going into that specific tank, and the model correctly still said NO - a real
+  hard-negative pass, not just an easy case.
+- Multi-object resolution (`require: all` across two real objects, not synthetic ones) -
+  exercised via the crop test above, both objects tracked independently in state.
+
+**Not yet field-tested:**
+- Windows hardware timing on the new crop pipeline - full-frame timing on that box is
+  known (~4.7 min/frame, see above); crop+448 should cut that drastically the same way
+  it did on Mac, but hasn't been re-measured there yet.
+- Telegram notification: implemented directly against the Bot API, not yet sent against
+  a real bot/chat.
+- `tank_far` has no positive example of its own (a real or synthesized pour into it) -
+  only validated as a correct negative so far, including with the operator in-frame.
 - Event-triggered detector (VAT/batch-change): state machine unit-tested against a
   mocked model in Python, not ported to the Go service. Prompts are first drafts.
-- RTSP capture and Twilio notification: implemented directly against each API, tested
-  against bad URLs and missing credentials for graceful failure. Not yet run against a
-  live camera or live Twilio account - no camera has been reachable from either dev
-  machine so far.
-- Our 8-image stock test set is weak: only one real hard negative, and none of the
-  images show the actual target scene (an outdoor water tank). Treat any pass/fail
-  result against it as low-confidence until real camera footage exists.
+- Our original 8-image stock test set is still weak (only one real hard negative, no
+  outdoor-tank scene) - superseded for the tank detector by the real-camera validation
+  above, but still what backs the Go integration tests in `backend/detector_test.go`.
 
 ## Model approach
 
@@ -116,9 +125,10 @@ Running **InternVL3.5-2B**, quantized to **Q4_K_M** (~1.2GB) via `llama.cpp`, ze
   training recipe, not precision.
 - Earlier prompt iteration found wording mattered more than model size: adding a "what
   is the person doing" field before the yes/no answer improved accuracy on ambiguous
-  frames. The current production prompt has since been simplified to a single
-  `POURING: YES/NO` question and hasn't been through that same repeated-run validation
-  yet — see [Validation status](#validation-status).
+  frames. The current production prompt has since been simplified further to a single
+  `POURING: YES/NO` question (person-visibility requirement dropped) - validated 4/4
+  against real camera crops, not yet through the same 10-repeated-runs determinism check
+  the earlier prompt got — see [Validation status](#validation-status).
 
 **Next**: fine-tune a smaller (~1B) InternVL checkpoint via LoRA once there's a real
 bank of labeled footage from the deployed cameras — collect real frames (50-200+ per
@@ -133,7 +143,7 @@ test data.
 |---|---|---|
 | **Triggers** | Scheduled window (day + start hour + deadline hour) | Event-triggered window (visual cue starts an N-hour countdown) - designed, not wired into the Go service |
 | **Detection** | Local zero-shot VLM (InternVL3.5-2B) | Fine-tuned local VLM (~1B, LoRA) once labeled data exists |
-| **Actions** | Twilio SMS/WhatsApp to one number; local speaker alarm (tone + spoken message x3) | USB-triggered physical alarm/beacon; web dashboard for status + config; cloud backend for notification routing; watchdog for machine-down alerts |
+| **Actions** | Telegram message to one chat; local speaker alarm (tone + spoken message x3) | USB-triggered physical alarm/beacon; web dashboard for status + config; cloud backend for notification routing; watchdog for machine-down alerts |
 
 ## Objects and crops
 
@@ -191,7 +201,7 @@ eval set and for the LoRA work below.
 ## Configuration
 
 Copy `config.yaml.example` to `config.yaml` and fill in real values. `config.yaml` is
-gitignored — it holds the Twilio auth token.
+gitignored — it holds the Telegram bot token.
 
 ```yaml
 detectors:
@@ -205,6 +215,8 @@ detectors:
     check_interval_seconds: 10
 
     capture:
+      # aspect_fix_width_scale: 2.0  # only for cameras that transmit anamorphic frames
+                                      # without saying so - see "Objects and crops" below
       max_edge_px: 448   # fixed - crop first, then cap the long edge, never upscale
       scaler: bicubic
 
@@ -223,12 +235,9 @@ detectors:
     require: all          # all | any
 
 notifications:
-  phone_number: "+91XXXXXXXXXX"
-  twilio:
-    account_sid: ""
-    auth_token: ""
-    from_number: ""
-    channel: sms   # or whatsapp
+  telegram:
+    bot_token: ""   # from @BotFather on Telegram
+    chat_id: "TBD"  # message your bot once, then GET the getUpdates endpoint to find it
 
 model:
   path: "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"

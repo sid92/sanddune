@@ -1,5 +1,5 @@
 # Copy this file to config.yaml and fill in real values.
-# config.yaml is gitignored - it will contain your Twilio auth token, a secret.
+# config.yaml is gitignored - it will contain your Telegram bot token, a secret.
 
 detectors:
   tank_replenish:
@@ -43,12 +43,10 @@ detectors:
     require: all   # all | any - whether every object or just one must resolve
 
 notifications:
-  phone_number: "+91XXXXXXXXXX"
-  twilio:
-    account_sid: ""
-    auth_token: ""
-    from_number: ""
-    channel: sms              # sms or whatsapp
+  telegram:
+    bot_token: ""   # from @BotFather on Telegram
+    chat_id: "TBD"  # the chat/user/group to notify - message your bot once, then GET
+                     # https://api.telegram.org/bot<TOKEN>/getUpdates to find it
 
 model:
   path: "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"
