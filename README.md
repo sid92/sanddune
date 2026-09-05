@@ -295,6 +295,34 @@ cd backend
 go test -v ./...
 ```
 
+## Deploying to a new machine
+
+The repo is private, so the target machine needs its own GitHub access first — either
+`gh auth login` there, or an SSH key / personal access token added to that machine's git.
+After that, setup is one command:
+
+```bash
+git clone https://github.com/sid92/sanddune.git && cd sanddune && ./setup-mac.sh
+```
+
+`setup-mac.sh` installs `go`, `ffmpeg`, and `llama.cpp` via Homebrew, builds `sanddune` and
+`cameracheck` from source, downloads the two model files (~1.8GB), and creates
+`config.yaml` from the template if one doesn't exist yet. `config.yaml`, `gguf/`, and
+`state/` are all gitignored, so they're local to each machine and never get overwritten by
+a pull — every deployment needs its own crop coordinates confirmed against its own camera
+(see [Objects and crops](#objects-and-crops)), since coordinates from one physical layout
+don't transfer to another.
+
+To update an existing deployment after pushing new code:
+
+```bash
+./update.sh   # git pull + rebuild; doesn't touch config.yaml, gguf/, or state/
+```
+
+This restarts nothing by itself — stop the running `./sanddune` and start it again after
+updating. There's no process supervision yet (see Roadmap), so a crash or a machine reboot
+currently requires someone to notice and restart it manually.
+
 ## Roadmap
 
 - **Single-binary packaging**: bundle `ffmpeg` and `llama.cpp` into the Go executable via
