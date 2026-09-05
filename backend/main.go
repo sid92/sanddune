@@ -16,13 +16,21 @@ import (
 )
 
 func main() {
-	// No real flags today - this exists so -h/--help exits with something
-	// useful instead of either falling through into the main loop (no
-	// flag.Parse() at all) or printing an empty "Usage of sanddune:" block
-	// (flag.Parse() with no flags registered).
+	// "selftest" is a subcommand, not a flag - dispatch before flag.Parse()
+	// touches os.Args, same as go/git/docker-style CLIs.
+	if len(os.Args) > 1 && os.Args[1] == "selftest" {
+		runSelfTest(os.Args[2:])
+		return
+	}
+
+	// No real flags on the main path - this exists so -h/--help exits with
+	// something useful instead of either falling through into the main loop
+	// (no flag.Parse() at all) or printing an empty "Usage of sanddune:"
+	// block (flag.Parse() with no flags registered).
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "sanddune takes no flags - it's configured entirely via config.yaml.")
 		fmt.Fprintln(os.Stderr, "Edit config.yaml next to this binary, then run: ./sanddune")
+		fmt.Fprintln(os.Stderr, "Run './sanddune selftest' to verify camera + model + notifications end-to-end.")
 		fmt.Fprintln(os.Stderr, "See README.md for the config reference.")
 	}
 	flag.Parse()

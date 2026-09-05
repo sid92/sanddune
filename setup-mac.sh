@@ -58,5 +58,6 @@ llama-mtmd-cli --version 2>&1 | head -1
 ffmpeg -version 2>&1 | head -1
 
 echo ""
-echo "Setup complete. Edit config.yaml, then run: ./sanddune"
-echo "(Run ./cameracheck first against any NEW camera before trusting its proportions - see README.)"
+echo "Setup complete. Edit config.yaml, then run: ./sanddune selftest"
+echo "(selftest verifies camera + model + Telegram end-to-end before you trust a live run."
+echo " Run ./cameracheck first against any NEW camera before trusting its proportions - see README.)"

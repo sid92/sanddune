@@ -213,6 +213,24 @@ cd ..
              # regardless of what directory it's launched from
 ```
 
+Before trusting a new install (or a new camera/config on an existing one), verify the whole
+chain end-to-end:
+
+```bash
+./sanddune selftest              # real camera pull + real VLM inference + real Telegram send
+./sanddune selftest -notify=false          # skip the Telegram send
+./sanddune selftest -object=tank_near      # only test one configured object
+```
+
+Runs the exact same code the live service uses - not a mock - against every configured
+object, and saves the pulled frame plus each object's crop under `state/selftest/<timestamp>/`
+so you can look at exactly what the model saw. Fails immediately with a clear message on the
+first broken step (config, camera, model, or notify) rather than a silent hang. `./sanddune`
+itself also does the camera half of this check once at startup, before entering its main
+loop - `selftest` covers the rest (model, notify) and can be re-run any time, not just at
+startup, including forcing a real Telegram send you'd otherwise only see on an actual
+deadline breach.
+
 Cross-compiling for Windows (buildable from macOS, no Windows machine needed for the
 build itself — see [Validation status](#validation-status) for what's confirmed on real
 Windows hardware):
