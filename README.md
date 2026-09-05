@@ -6,7 +6,8 @@ a deadline — e.g. tank not refilled by 2pm, floor not cleaned within 2 hours o
 change.
 
 Capture, inference, and notification all run on the local machine. No cloud dependency
-in the detection loop.
+in the detection loop — streaming continuous camera footage off-site isn't bandwidth-viable
+at this scale anyway.
 
 ## System flow
 
@@ -28,8 +29,7 @@ Two trigger types, same underlying pattern:
 - **Scheduled** — fixed day/time window (e.g. Monday 07:00–14:00). `detectors.tank_replenish`
   in `config.yaml`.
 - **Event-triggered** — window opens when the VLM detects a visual cue (e.g. a vat rotated
-  180° signaling a batch change), runs for a fixed duration after (e.g. 2 hours). Prompts
-  not yet validated against real footage — see [Validation status](#validation-status).
+  180° signaling a batch change), runs for a fixed duration after (e.g. 2 hours).
 
 ## Architecture
 
@@ -62,69 +62,6 @@ flowchart LR
 Everything runs local, including the Telegram call — no backend service. Simpler, no
 hosting cost. Tradeoff: if the local machine goes down (crash, power loss), nothing
 pages anyone. That's the Watchdog box — future work, not solved today.
-
-## Validation status
-
-**Verified:**
-- Detector state machine: deadline tracking, single-fire notification, day/window
-  gating, per-object resolution — tested end-to-end via Go integration tests
-  (`backend/detector_test.go`) against the real inference pipeline.
-- Build: compiles natively on macOS, cross-compiles to Windows.
-- Windows hardware test: ran the same integration tests on a real Windows box (Intel
-  Core i3-6100, 2 cores/4 threads, 8GB RAM, no GPU). Output was correct, but took
-  ~4.7 min/frame at full resolution, dominated by vision encoding (~123s) - a hardware
-  ceiling on this CPU, not a bug (the vision encoder is the same size regardless of
-  model/quant choice). Two real fixes came out of that run: `runVLM`'s timeout was
-  hardcoded to 120s, shorter than vision encoding alone took there, now configurable
-  (`model.timeout_seconds`, `model.threads`); and `-t 4` cut total time ~31% (this chip
-  is memory-latency-bound, not core-bound - threading helps more than expected).
-- 448px capture cap: ~5.3x faster (image tokens are the actual bottleneck - one full-res
-  frame is ~3,400 tokens, ~163s of prefill alone). Tradeoff found in the same test: one
-  image (a person painting a barrel, not pouring) flipped to a false positive at 448 -
-  the model lost a small object (a paintbrush) it correctly saw at full resolution.
-  False positives are the dangerous direction here (only `POURING: YES` resolves an
-  object), so 448 is not free precision-wise. Two structurally different prompts failed
-  this same image identically, pointing at pixel information lost in the downscale, not
-  prompt wording.
-
-- Real camera connected: the actual deployment camera (Hikvision DVR, channel showing
-  the two-tank room). Found and fixed a real bug there - the channel transmits "1080P
-  Lite" mode (half horizontal resolution, no metadata saying so), which would have made
-  every crop coordinate wrong. `backend/cmd/cameracheck` now catches this automatically
-  for any camera - confirmed independently on both Mac and the Windows box.
-- Telegram notification: real message sent from the actual code path (bot token + chat
-  ID from `getUpdates`) and confirmed received.
-- Multi-object resolution (`require: all` across two objects) - state machine exercised
-  end-to-end, both objects tracked independently.
-- Windows crop-pipeline timing measured: ~62s for a full 2-object cycle (vs ~4.7 min/frame
-  full-resolution single-object) - crop+448 is a real ~6x win there, but the absolute
-  number is nowhere near the Mac's ~1.2-1.3s/crop (~25x slower hardware). ~17-19s of
-  *each* call is model reload, since the CLI respawns per object - this cost multiplies
-  with object count, which is why a resident-model (`llama-server`) rework is now a real
-  priority rather than a nice-to-have, especially for cameras with more than 2 objects.
-  `check_interval_seconds: 10` is not achievable on that hardware as currently built.
-
-**Crop coordinates: corrected once, still unconfirmed:**
-- An earlier `tank_near` box (my own widened substitution, not Sid's) was confirmed
-  wrong - wide enough to span *both* tanks, so a pour at either would have incorrectly
-  resolved both objects. `config.yaml` now uses Sid's exact coordinates instead, read
-  directly off a gridded 1920x1080 reference frame (`tank_near: [1100,0,400,1000]`,
-  `tank_far: [1500,0,400,1000]`).
-- These still aren't fully trustworthy. With the person-agnostic prompt, a test against
-  this exact `tank_near` box on the synthesized positive image returned `POURING: NO` -
-  the box may be too tight and clip the actual water/opening, not just the operator.
-  `tank_far` has no positive example of its own at all. The two tanks sit immediately
-  adjacent, so any box with enough headroom for one tank's pour risks clipping into the
-  neighbor's space either way. Resolving this needs a real or synthesized pour-in-progress
-  photo at **each** tank individually - blocking for finishing crop calibration, not a
-  nice-to-have.
-
-**Not yet field-tested:**
-- Event-triggered detector (VAT/batch-change): state machine unit-tested against a
-  mocked model in Python, not ported to the Go service. Prompts are first drafts.
-- Our original 8-image stock test set is still weak (only one real hard negative, no
-  outdoor-tank scene) - superseded for the tank detector by the real-camera validation
-  above, but still what backs the Go integration tests in `backend/detector_test.go`.
 
 ## Model approach
 
@@ -335,3 +272,67 @@ currently requires someone to notice and restart it manually.
 - **Web dashboard + cloud backend**: status visibility and config changes without
   touching the file directly.
 - **USB-triggered physical alarm/beacon**: local alert channel beyond speakers and phone.
+
+## Validation status
+
+**Verified:**
+- Detector state machine: deadline tracking, single-fire notification, day/window
+  gating, per-object resolution — tested end-to-end via Go integration tests
+  (`backend/detector_test.go`) against the real inference pipeline.
+- Build: compiles natively on macOS, cross-compiles to Windows.
+- Windows hardware test: ran the same integration tests on a real Windows box (Intel
+  Core i3-6100, 2 cores/4 threads, 8GB RAM, no GPU). Output was correct, but took
+  ~4.7 min/frame at full resolution, dominated by vision encoding (~123s) - a hardware
+  ceiling on this CPU, not a bug (the vision encoder is the same size regardless of
+  model/quant choice). Two real fixes came out of that run: `runVLM`'s timeout was
+  hardcoded to 120s, shorter than vision encoding alone took there, now configurable
+  (`model.timeout_seconds`, `model.threads`); and `-t 4` cut total time ~31% (this chip
+  is memory-latency-bound, not core-bound - threading helps more than expected).
+- 448px capture cap: ~5.3x faster (image tokens are the actual bottleneck - one full-res
+  frame is ~3,400 tokens, ~163s of prefill alone). Tradeoff found in the same test: one
+  image (a person painting a barrel, not pouring) flipped to a false positive at 448 -
+  the model lost a small object (a paintbrush) it correctly saw at full resolution.
+  False positives are the dangerous direction here (only `POURING: YES` resolves an
+  object), so 448 is not free precision-wise. Two structurally different prompts failed
+  this same image identically, pointing at pixel information lost in the downscale, not
+  prompt wording.
+
+- Real camera connected: the actual deployment camera (Hikvision DVR, channel showing
+  the two-tank room). Found and fixed a real bug there - the channel transmits "1080P
+  Lite" mode (half horizontal resolution, no metadata saying so), which would have made
+  every crop coordinate wrong. `backend/cmd/cameracheck` now catches this automatically
+  for any camera - confirmed independently on both Mac and the Windows box.
+- Telegram notification: real message sent from the actual code path (bot token + chat
+  ID from `getUpdates`) and confirmed received.
+- Multi-object resolution (`require: all` across two objects) - state machine exercised
+  end-to-end, both objects tracked independently.
+- Windows crop-pipeline timing measured: ~62s for a full 2-object cycle (vs ~4.7 min/frame
+  full-resolution single-object) - crop+448 is a real ~6x win there, but the absolute
+  number is nowhere near the Mac's ~1.2-1.3s/crop (~25x slower hardware). ~17-19s of
+  *each* call is model reload, since the CLI respawns per object - this cost multiplies
+  with object count, which is why a resident-model (`llama-server`) rework is now a real
+  priority rather than a nice-to-have, especially for cameras with more than 2 objects.
+  `check_interval_seconds: 10` is not achievable on that hardware as currently built.
+
+**Crop coordinates: corrected once, still unconfirmed:**
+- An earlier `tank_near` box (my own widened substitution, not Sid's) was confirmed
+  wrong - wide enough to span *both* tanks, so a pour at either would have incorrectly
+  resolved both objects. `config.yaml` now uses Sid's exact coordinates instead, read
+  directly off a gridded 1920x1080 reference frame (`tank_near: [1100,0,400,1000]`,
+  `tank_far: [1500,0,400,1000]`).
+- These still aren't fully trustworthy. With the person-agnostic prompt, a test against
+  this exact `tank_near` box on the synthesized positive image returned `POURING: NO` -
+  the box may be too tight and clip the actual water/opening, not just the operator.
+  `tank_far` has no positive example of its own at all. The two tanks sit immediately
+  adjacent, so any box with enough headroom for one tank's pour risks clipping into the
+  neighbor's space either way. Resolving this needs a real or synthesized pour-in-progress
+  photo at **each** tank individually - blocking for finishing crop calibration, not a
+  nice-to-have.
+
+**Not yet field-tested:**
+- Event-triggered detector (VAT/batch-change): state machine unit-tested against a
+  mocked model in Python, not ported to the Go service. Prompts are first drafts.
+- Our original 8-image stock test set is still weak (only one real hard negative, no
+  outdoor-tank scene) - superseded for the tank detector by the real-camera validation
+  above, but still what backs the Go integration tests in `backend/detector_test.go`.
+

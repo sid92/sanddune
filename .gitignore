@@ -14,9 +14,13 @@ state/
 gguf/**/*.gguf
 gguf/run_*_raw.log
 
-# compiled Go binary - build with `go build` inside backend/, don't commit
+# compiled Go binaries - build with `go build` inside backend/, don't commit
 /sanddune
 /sanddune.exe
 backend/sanddune
 backend/sanddune.exe
+/cameracheck
+/cameracheck.exe
+backend/cameracheck
+backend/cameracheck.exe
 camera_captures/

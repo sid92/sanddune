@@ -7,14 +7,23 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 )
 
 func main() {
-	// No real flags today, but this makes -h/--help print usage and exit
-	// instead of silently falling through into the main loop.
+	// No real flags today - this exists so -h/--help exits with something
+	// useful instead of either falling through into the main loop (no
+	// flag.Parse() at all) or printing an empty "Usage of sanddune:" block
+	// (flag.Parse() with no flags registered).
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "sanddune takes no flags - it's configured entirely via config.yaml.")
+		fmt.Fprintln(os.Stderr, "Edit config.yaml next to this binary, then run: ./sanddune")
+		fmt.Fprintln(os.Stderr, "See README.md for the config reference.")
+	}
 	flag.Parse()
 
 	log.Printf("Tank detector service starting (project root: %s)", projectRoot)
