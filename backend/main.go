@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -41,6 +42,18 @@ func main() {
 	if rtspURL == "" || strings.Contains(rtspURL, "camera-ip") {
 		log.Fatalf("detectors.tank_replenish.rtsp_url in config.yaml is still the placeholder - edit it with your real camera URL before running")
 	}
+
+	if cfg.Notifications.Telegram.BotToken == "" || cfg.Notifications.Telegram.ChatID == "" || cfg.Notifications.Telegram.ChatID == "TBD" {
+		log.Printf("WARNING: notifications.telegram not configured in config.yaml - alerts will only be logged, not sent. See README 'Configuration'.")
+	}
+
+	log.Printf("checking camera connection...")
+	testFrame := filepath.Join(os.TempDir(), "sanddune_startup_check.jpg")
+	if err := grabFrame(rtspURL, testFrame, cfg.Detectors.TankReplenish.Capture.AspectFixWidthScale); err != nil {
+		log.Fatalf("camera check failed: %v\n\nFix detectors.tank_replenish.rtsp_url in config.yaml (wrong IP, credentials, or stream path) and try again.", err)
+	}
+	os.Remove(testFrame)
+	log.Printf("camera check OK")
 
 	runScheduler(cfg.Detectors.TankReplenish.CheckIntervalSeconds)
 }
