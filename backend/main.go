@@ -6,11 +6,17 @@
 package main
 
 import (
+	"flag"
 	"log"
+	"strings"
 	"time"
 )
 
 func main() {
+	// No real flags today, but this makes -h/--help print usage and exit
+	// instead of silently falling through into the main loop.
+	flag.Parse()
+
 	log.Printf("Tank detector service starting (project root: %s)", projectRoot)
 
 	cfg, err := loadConfig()
@@ -20,6 +26,11 @@ func main() {
 
 	if !cfg.Detectors.TankReplenish.Enabled {
 		log.Fatalf("detectors.tank_replenish.enabled is false in config.yaml - nothing to run")
+	}
+
+	rtspURL := cfg.Detectors.TankReplenish.RTSPURL
+	if rtspURL == "" || strings.Contains(rtspURL, "camera-ip") {
+		log.Fatalf("detectors.tank_replenish.rtsp_url in config.yaml is still the placeholder - edit it with your real camera URL before running")
 	}
 
 	runScheduler(cfg.Detectors.TankReplenish.CheckIntervalSeconds)
