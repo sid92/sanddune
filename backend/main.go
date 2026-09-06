@@ -113,7 +113,7 @@ func runScheduler(intervalSeconds int) {
 // camera_health.interval_seconds or miss_threshold takes effect without a
 // restart.
 func runCameraHealthLoop() {
-	health := &cameraHealthState{}
+	health := loadCameraHealthState()
 	for {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -143,6 +143,7 @@ func checkCameraHealth(cfg *Config, health *cameraHealthState) {
 	if logMsg == "" {
 		return
 	}
+	health.persist()
 	log.Printf("camera health: %s", logMsg)
 	if _, sendErr := sendNotification(cfg, notifyMsg); sendErr != nil {
 		log.Printf("camera health notification failed: %v", sendErr)

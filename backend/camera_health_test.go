@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -50,5 +52,42 @@ func TestCameraHealthStateTransitions(t *testing.T) {
 	}
 	if _, notify := h.recordResult(failure, 3); notify == "" {
 		t.Errorf("second outage tick 3: expected a non-empty unreachable message, got empty")
+	}
+}
+
+// TestCameraHealthPersistsAcrossRestart is the actual bug this was written
+// for: multiple sanddune restarts while the camera stayed down the whole
+// time each independently hit their own miss_threshold and re-sent the
+// "unreachable" alert, even though nothing had actually changed. Restoring
+// down=true from disk must suppress that.
+func TestCameraHealthPersistsAcrossRestart(t *testing.T) {
+	os.Remove(filepath.Join(stateDir, cameraHealthStateName+".json"))
+	defer os.Remove(filepath.Join(stateDir, cameraHealthStateName+".json"))
+	failure := errors.New("connection refused")
+
+	h1 := loadCameraHealthState()
+	if h1.down {
+		t.Fatalf("fresh state (no state file yet) should default to down=false, got true")
+	}
+	for i := 0; i < 3; i++ {
+		h1.recordResult(failure, 3)
+	}
+	if !h1.down {
+		t.Fatalf("expected down=true after 3 failures at threshold 3")
+	}
+	h1.persist()
+
+	// Simulate a restart: a brand new process loads state fresh from disk.
+	h2 := loadCameraHealthState()
+	if !h2.down {
+		t.Fatalf("restored state should have down=true, got false")
+	}
+	if _, notify := h2.recordResult(failure, 3); notify != "" {
+		t.Errorf("restart while still down must NOT re-alert: got %q, want empty", notify)
+	}
+
+	// Recovery after the restart must still fire exactly once.
+	if _, notify := h2.recordResult(nil, 3); notify == "" {
+		t.Errorf("recovery after restart: expected a non-empty 'reachable again' message, got empty")
 	}
 }

@@ -221,9 +221,20 @@ DVR offline
 
 (`DVR online` on recovery). The verbose ffmpeg error behind a failure goes to the local log
 only, never into the Telegram text. Neither message repeats while the state holds - one
-alert per transition, not per tick, so a multi-hour outage doesn't flood the chat. This
-tracking is in-memory only: a restart of `sanddune` itself during an outage resets the miss
-count to zero. Confirmed live against a real DVR outage during development (see
+alert per transition, not per tick, so a multi-hour outage doesn't flood the chat.
+
+The down/up state (not the miss count) is persisted to `state/camera_health.json`
+specifically so this holds across restarts too - a crash, an `update.sh`, or just manually
+restarting `sanddune` while the camera is already known to be down must NOT re-send the
+"offline" alert. Found this the hard way during development: several restarts against the
+same real, still-ongoing outage each independently hit their own miss threshold and re-sent
+"offline", even though nothing had actually changed - confusing and easy to mistake for a
+flapping connection. Confirmed fixed live: a second run against the same real, still-ongoing
+outage stayed silent instead of re-alerting. The "restart while down, then actually recover"
+half of that same scenario is unit-tested (`TestCameraHealthPersistsAcrossRestart`) but not
+yet confirmed live - would need the real outage to end while testing this specific path.
+
+Confirmed live against a real DVR outage during development (see
 [Validation status](#validation-status)).
 
 ## Running it
@@ -323,11 +334,12 @@ currently requires someone to notice and restart it manually.
 - Detector state machine: deadline tracking, single-fire notification, day/window
   gating, per-object resolution — tested end-to-end via Go integration tests
   (`backend/detector_test.go`) against the real inference pipeline.
-- Camera health alerts: state-transition logic unit-tested (`backend/camera_health_test.go`)
-  and the "unreachable" side confirmed live against a real DVR outage during
-  development — correct threshold behavior, correct log vs. Telegram message split. The
-  "back online" side is unit-tested but not yet confirmed live (would need the same real
-  outage to actually recover while the service was running to watch it).
+- Camera health alerts: state-transition logic unit-tested (`backend/camera_health_test.go`),
+  the "unreachable" side confirmed live against a real DVR outage, and cross-restart
+  persistence (no duplicate "offline" alert across a restart while still down) confirmed
+  live by actually restarting against that same ongoing outage. The "restart while down,
+  then it recovers" path is unit-tested but not yet confirmed live (would need the real
+  outage to end while testing that specific path).
 - Build: compiles natively on macOS, cross-compiles to Windows.
 - Windows hardware test: ran the same integration tests on a real Windows box (Intel
   Core i3-6100, 2 cores/4 threads, 8GB RAM, no GPU). Output was correct, but took

@@ -5,17 +5,48 @@ import (
 	"time"
 )
 
-// cameraHealthState tracks consecutive grabFrame failures across scheduler
-// ticks so a DVR/network outage triggers exactly one "camera unreachable"
-// notification (not one per failed tick - could be hundreds over a long
-// outage) and exactly one "back online" notification on recovery. In-memory
-// only: a sanddune restart during an outage starts the miss count over,
-// an acceptable tradeoff against persisting cross-restart health state for
-// what is fundamentally a live/right-now signal.
+const cameraHealthStateName = "camera_health"
+
+// cameraHealthState tracks consecutive grabFrame failures across checks so
+// a DVR/network outage triggers exactly one "camera unreachable"
+// notification (not one per failed check - could be hundreds over a long
+// outage) and exactly one "back online" notification on recovery. down and
+// downSince are persisted to state/camera_health.json (see loadCameraHealthState
+// / persist below) specifically so a sanddune restart - or a crash, or a
+// deliberate update - while the camera is already known to be down does NOT
+// re-fire the "unreachable" alert; only an actual up-to-down transition
+// should ever notify, restarts shouldn't matter to that.
 type cameraHealthState struct {
 	consecutiveFails int
 	down             bool
 	downSince        time.Time
+}
+
+// loadCameraHealthState restores down/downSince from disk (defaulting to
+// "up, never been down" if there's no state file yet - a fresh install, or
+// state/ was cleared).
+func loadCameraHealthState() *cameraHealthState {
+	st := loadState(cameraHealthStateName)
+	h := &cameraHealthState{}
+	if down, ok := st["down"].(bool); ok {
+		h.down = down
+	}
+	if s, ok := st["down_since"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			h.downSince = t
+		}
+	}
+	return h
+}
+
+// persist saves down/downSince - call this only when recordResult reports a
+// transition (a non-empty result), not every check; the down/up state is
+// the only part worth surviving a restart.
+func (h *cameraHealthState) persist() {
+	saveState(cameraHealthStateName, map[string]any{
+		"down":       h.down,
+		"down_since": h.downSince.Format(time.RFC3339),
+	})
 }
 
 // recordResult updates health state from one camera-reachability attempt.
