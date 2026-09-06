@@ -77,15 +77,23 @@ func (o ObjectConfig) hasCrop() bool {
 	return o.Crop != [4]int{0, 0, 0, 0}
 }
 
+// CameraHealthConfig controls the always-on (not just during the schedule
+// window) camera reachability check - independent of tank detection, since
+// a DVR/network outage doesn't respect the check schedule.
+type CameraHealthConfig struct {
+	MissThreshold int `yaml:"miss_threshold"` // consecutive failed grabs before alerting
+}
+
 type TankDetectorConfig struct {
-	Enabled              bool           `yaml:"enabled"`
-	RTSPURL              string         `yaml:"rtsp_url"`
-	Schedule             ScheduleConfig `yaml:"schedule"`
-	CheckIntervalSeconds int            `yaml:"check_interval_seconds"`
-	Capture              CaptureConfig  `yaml:"capture"`
-	Action               ActionConfig   `yaml:"action"`
-	Objects              []ObjectConfig `yaml:"objects"`
-	Require              string         `yaml:"require"` // "all" or "any"
+	Enabled              bool               `yaml:"enabled"`
+	RTSPURL              string             `yaml:"rtsp_url"`
+	Schedule             ScheduleConfig     `yaml:"schedule"`
+	CheckIntervalSeconds int                `yaml:"check_interval_seconds"`
+	Capture              CaptureConfig      `yaml:"capture"`
+	Action               ActionConfig       `yaml:"action"`
+	Objects              []ObjectConfig     `yaml:"objects"`
+	Require              string             `yaml:"require"` // "all" or "any"
+	CameraHealth         CameraHealthConfig `yaml:"camera_health"`
 }
 
 // objectsOrDefault returns the configured objects, or a single synthetic
@@ -182,6 +190,9 @@ func loadConfig() (*Config, error) {
 	}
 	if cfg.Detectors.TankReplenish.Capture.MaxEdgePx == 0 {
 		cfg.Detectors.TankReplenish.Capture.MaxEdgePx = 448
+	}
+	if cfg.Detectors.TankReplenish.CameraHealth.MissThreshold == 0 {
+		cfg.Detectors.TankReplenish.CameraHealth.MissThreshold = 3
 	}
 	if cfg.Model.Path == "" {
 		cfg.Model.Path = "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"

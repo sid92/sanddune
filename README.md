@@ -182,6 +182,9 @@ detectors:
 
     require: all          # all | any
 
+    camera_health:
+      miss_threshold: 3   # consecutive failed pulls before alerting - see below
+
 notifications:
   telegram:
     bot_token: ""   # from @BotFather on Telegram
@@ -199,6 +202,25 @@ local_alarm:
 ```
 
 Re-read on every check — edits take effect without a restart.
+
+### Camera health alerts
+
+The service pings the camera every `check_interval_seconds`, all day - independent of the
+schedule window, since a DVR/network outage doesn't wait for business hours. After
+`camera_health.miss_threshold` consecutive failed pulls it sends one Telegram alert, then
+one more when a pull succeeds again - both as the same short two-line template:
+
+```
+Time: Sat 09/06 02:59 PM
+DVR offline
+```
+
+(`DVR online` on recovery). The verbose ffmpeg error behind a failure goes to the local log
+only, never into the Telegram text. Neither message repeats while the state holds - one
+alert per transition, not per tick, so a multi-hour outage doesn't flood the chat. This
+tracking is in-memory only: a restart of `sanddune` itself during an outage resets the miss
+count to zero. Confirmed live against a real DVR outage during development (see
+[Validation status](#validation-status)).
 
 ## Running it
 
@@ -297,6 +319,11 @@ currently requires someone to notice and restart it manually.
 - Detector state machine: deadline tracking, single-fire notification, day/window
   gating, per-object resolution — tested end-to-end via Go integration tests
   (`backend/detector_test.go`) against the real inference pipeline.
+- Camera health alerts: state-transition logic unit-tested (`backend/camera_health_test.go`)
+  and the "unreachable" side confirmed live against a real DVR outage during
+  development — correct threshold behavior, correct log vs. Telegram message split. The
+  "back online" side is unit-tested but not yet confirmed live (would need the same real
+  outage to actually recover while the service was running to watch it).
 - Build: compiles natively on macOS, cross-compiles to Windows.
 - Windows hardware test: ran the same integration tests on a real Windows box (Intel
   Core i3-6100, 2 cores/4 threads, 8GB RAM, no GPU). Output was correct, but took

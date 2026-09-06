@@ -58,10 +58,18 @@ func main() {
 	log.Printf("checking camera connection...")
 	testFrame := filepath.Join(os.TempDir(), "sanddune_startup_check.jpg")
 	if err := grabFrame(rtspURL, testFrame, cfg.Detectors.TankReplenish.Capture.AspectFixWidthScale); err != nil {
-		log.Fatalf("camera check failed: %v\n\nFix detectors.tank_replenish.rtsp_url in config.yaml (wrong IP, credentials, or stream path) and try again.", err)
+		// Not fatal: a camera/DVR outage at the moment of launch shouldn't
+		// block the service from starting - checkCameraHealth() (in
+		// runScheduler below) will pick this up, alert once the configured
+		// miss_threshold is hit, and alert again on recovery. A hard exit
+		// here would mean an outage that started before a reboot/restart
+		// silently prevents the service (and its own outage alerting) from
+		// running at all - worse than starting and reporting real status.
+		log.Printf("WARNING: camera check failed at startup (will keep retrying): %v", err)
+	} else {
+		os.Remove(testFrame)
+		log.Printf("camera check OK")
 	}
-	os.Remove(testFrame)
-	log.Printf("camera check OK")
 
 	runScheduler(cfg.Detectors.TankReplenish.CheckIntervalSeconds)
 }
@@ -77,12 +85,17 @@ func runScheduler(intervalSeconds int) {
 	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
 	defer ticker.Stop()
 
+	health := &cameraHealthState{}
+
 	for range ticker.C {
 		cfg, err := loadConfig()
 		if err != nil {
 			log.Printf("scheduled check: failed to reload config.yaml: %v", err)
 			continue
 		}
+
+		checkCameraHealth(cfg, health)
+
 		result, err := runTankCheck(cfg, time.Now(), "")
 		if err != nil {
 			log.Printf("scheduled check error: %v", err)
@@ -91,5 +104,26 @@ func runScheduler(intervalSeconds int) {
 		if result["status"] == "checked" {
 			log.Printf("scheduled check: %v", result["state"])
 		}
+	}
+}
+
+// checkCameraHealth pings the camera every tick regardless of the tank
+// detector's schedule window - a DVR/network outage doesn't wait for the
+// window to open, so this catches it (and reports recovery) any time.
+func checkCameraHealth(cfg *Config, health *cameraHealthState) {
+	det := cfg.Detectors.TankReplenish
+	frame, err := tempJPEGPath()
+	if err == nil {
+		err = grabFrame(det.RTSPURL, frame, det.Capture.AspectFixWidthScale)
+		os.Remove(frame)
+	}
+
+	logMsg, notifyMsg := health.recordResult(err, det.CameraHealth.MissThreshold)
+	if logMsg == "" {
+		return
+	}
+	log.Printf("camera health: %s", logMsg)
+	if _, sendErr := sendNotification(cfg, notifyMsg); sendErr != nil {
+		log.Printf("camera health notification failed: %v", sendErr)
 	}
 }
