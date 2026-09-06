@@ -261,12 +261,16 @@ chain end-to-end:
 
 Runs the exact same code the live service uses - not a mock - against every configured
 object, and saves the pulled frame plus each object's crop under `state/selftest/<timestamp>/`
-so you can look at exactly what the model saw. Fails immediately with a clear message on the
-first broken step (config, camera, model, or notify) rather than a silent hang. `./sanddune`
-itself also does the camera half of this check once at startup, before entering its main
-loop - `selftest` covers the rest (model, notify) and can be re-run any time, not just at
-startup, including forcing a real Telegram send you'd otherwise only see on an actual
-deadline breach.
+so you can look at exactly what the model saw. Every check runs regardless of whether an
+earlier one failed, printing a report line (`OK`/`FAIL`/`SKIP`) for each - config, camera,
+one line per object's model check, and notify - so a broken camera doesn't hide whether
+Telegram is configured correctly, since those are independent things to go fix. `SKIP` means
+a prerequisite failed (e.g. every model check is skipped if the camera check failed - no
+frame to run inference on), not that the check itself broke. Exits non-zero if anything
+failed, after the full report - not before it. `./sanddune` itself also does the camera half
+of this check once at startup, before entering its main loop - `selftest` covers the rest
+(model, notify) and can be re-run any time, not just at startup, including forcing a real
+Telegram send you'd otherwise only see on an actual deadline breach.
 
 Cross-compiling for Windows (buildable from macOS, no Windows machine needed for the
 build itself — see [Validation status](#validation-status) for what's confirmed on real
