@@ -94,7 +94,9 @@ func runScheduler(intervalSeconds int) {
 			continue
 		}
 
-		checkCameraHealth(cfg, health)
+		if inScheduleWindow(cfg.Detectors.TankReplenish.Schedule, time.Now()) {
+			checkCameraHealth(cfg, health)
+		}
 
 		result, err := runTankCheck(cfg, time.Now(), "")
 		if err != nil {
@@ -107,9 +109,10 @@ func runScheduler(intervalSeconds int) {
 	}
 }
 
-// checkCameraHealth pings the camera every tick regardless of the tank
-// detector's schedule window - a DVR/network outage doesn't wait for the
-// window to open, so this catches it (and reports recovery) any time.
+// checkCameraHealth pings the camera once per tick. Callers should gate this
+// to the schedule window (see inScheduleWindow) for now - camera health
+// doesn't yet have its own independent schedule, so it shares the tank
+// detector's window rather than running 24x7.
 func checkCameraHealth(cfg *Config, health *cameraHealthState) {
 	det := cfg.Detectors.TankReplenish
 	frame, err := tempJPEGPath()

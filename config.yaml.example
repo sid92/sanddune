@@ -43,11 +43,11 @@ detectors:
     require: all   # all | any - whether every object or just one must resolve
 
     camera_health:
-      miss_threshold: 3   # consecutive failed camera pulls before sending a
-                           # "camera unreachable" alert (checked every
-                           # check_interval_seconds, all day - not just
-                           # during the schedule window above). A "back
-                           # online" alert fires once on recovery.
+      miss_threshold: 3   # consecutive failed camera pulls (checked every
+                           # check_interval_seconds during the schedule
+                           # window above - not yet its own 24x7 schedule)
+                           # before sending a "camera unreachable" alert. A
+                           # "back online" alert fires once on recovery.
 
 notifications:
   telegram:
