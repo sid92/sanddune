@@ -183,7 +183,8 @@ detectors:
     require: all          # all | any
 
     camera_health:
-      miss_threshold: 3   # consecutive failed pulls before alerting - see below
+      interval_seconds: 30  # 24x7, independent of the schedule above - see below
+      miss_threshold: 2     # consecutive failed pulls before alerting
 
 notifications:
   telegram:
@@ -205,13 +206,13 @@ Re-read on every check — edits take effect without a restart.
 
 ### Camera health alerts
 
-The service pings the camera every `check_interval_seconds` during the same schedule
-window as the tank check itself (`detectors.tank_replenish.schedule`) - not yet its own
-independent schedule, so it's silent outside those hours even if the camera is down the
-whole time. Making this 24x7 (or its own separate window) is a planned follow-up, not done
-yet - see Roadmap. After `camera_health.miss_threshold` consecutive failed pulls it sends
-one Telegram alert, then one more when a pull succeeds again - both as the same short
-two-line template:
+Runs 24x7 in its own goroutine, on its own fixed cadence
+(`camera_health.interval_seconds`, default 30s) - fully independent of the tank detector's
+schedule, since a DVR/network outage doesn't wait for business hours. Each check is one
+throwaway single-frame grab, immediately discarded - deliberately lightweight since it runs
+around the clock rather than only during a narrow window. After
+`camera_health.miss_threshold` (default 2) consecutive failed pulls it sends one Telegram
+alert, then one more when a pull succeeds again - both as the same short two-line template:
 
 ```
 Time: Sat 09/06 02:59 PM
@@ -312,10 +313,6 @@ currently requires someone to notice and restart it manually.
 - **Multi-camera fan-out**: one camera per detector today; generalize to N.
 - **Service supervision**: watchdog that pages the admin if the local machine goes
   offline — the one failure mode a local-only architecture can't self-report.
-- **Independent camera health schedule**: currently shares the tank detector's schedule
-  window, so a DVR outage outside those hours goes unreported until the window reopens.
-  Give it its own schedule config (e.g. 24x7) once there's a real need for round-the-clock
-  camera monitoring independent of any specific detector's operating hours.
 - **Web dashboard + cloud backend**: status visibility and config changes without
   touching the file directly.
 - **USB-triggered physical alarm/beacon**: local alert channel beyond speakers and phone.

@@ -77,11 +77,12 @@ func (o ObjectConfig) hasCrop() bool {
 	return o.Crop != [4]int{0, 0, 0, 0}
 }
 
-// CameraHealthConfig controls the always-on (not just during the schedule
-// window) camera reachability check - independent of tank detection, since
-// a DVR/network outage doesn't respect the check schedule.
+// CameraHealthConfig controls the always-on, 24x7 camera reachability
+// check - runs on its own fixed cadence, fully independent of any
+// detector's schedule, since a DVR/network outage doesn't respect it.
 type CameraHealthConfig struct {
-	MissThreshold int `yaml:"miss_threshold"` // consecutive failed grabs before alerting
+	IntervalSeconds int `yaml:"interval_seconds"` // how often to ping the camera, all day
+	MissThreshold   int `yaml:"miss_threshold"`   // consecutive failed pings before alerting
 }
 
 type TankDetectorConfig struct {
@@ -192,7 +193,10 @@ func loadConfig() (*Config, error) {
 		cfg.Detectors.TankReplenish.Capture.MaxEdgePx = 448
 	}
 	if cfg.Detectors.TankReplenish.CameraHealth.MissThreshold == 0 {
-		cfg.Detectors.TankReplenish.CameraHealth.MissThreshold = 3
+		cfg.Detectors.TankReplenish.CameraHealth.MissThreshold = 2
+	}
+	if cfg.Detectors.TankReplenish.CameraHealth.IntervalSeconds == 0 {
+		cfg.Detectors.TankReplenish.CameraHealth.IntervalSeconds = 30
 	}
 	if cfg.Model.Path == "" {
 		cfg.Model.Path = "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"

@@ -71,6 +71,8 @@ func main() {
 		log.Printf("camera check OK")
 	}
 
+	go runCameraHealthLoop()
+
 	runScheduler(cfg.Detectors.TankReplenish.CheckIntervalSeconds)
 }
 
@@ -85,17 +87,11 @@ func runScheduler(intervalSeconds int) {
 	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
 	defer ticker.Stop()
 
-	health := &cameraHealthState{}
-
 	for range ticker.C {
 		cfg, err := loadConfig()
 		if err != nil {
 			log.Printf("scheduled check: failed to reload config.yaml: %v", err)
 			continue
-		}
-
-		if inScheduleWindow(cfg.Detectors.TankReplenish.Schedule, time.Now()) {
-			checkCameraHealth(cfg, health)
 		}
 
 		result, err := runTankCheck(cfg, time.Now(), "")
@@ -109,10 +105,32 @@ func runScheduler(intervalSeconds int) {
 	}
 }
 
-// checkCameraHealth pings the camera once per tick. Callers should gate this
-// to the schedule window (see inScheduleWindow) for now - camera health
-// doesn't yet have its own independent schedule, so it shares the tank
-// detector's window rather than running 24x7.
+// runCameraHealthLoop pings the camera on its own fixed cadence, 24x7,
+// completely independent of the tank detector's schedule - a DVR/network
+// outage doesn't wait for business hours. Runs in its own goroutine
+// (started once from main, alongside runScheduler) for the life of the
+// process. Config is re-read every cycle, same as runScheduler, so editing
+// camera_health.interval_seconds or miss_threshold takes effect without a
+// restart.
+func runCameraHealthLoop() {
+	health := &cameraHealthState{}
+	for {
+		cfg, err := loadConfig()
+		if err != nil {
+			log.Printf("camera health: failed to reload config.yaml: %v", err)
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		checkCameraHealth(cfg, health)
+
+		time.Sleep(time.Duration(cfg.Detectors.TankReplenish.CameraHealth.IntervalSeconds) * time.Second)
+	}
+}
+
+// checkCameraHealth pings the camera once - a single lightweight frame
+// grab, thrown away immediately - and reports a state transition (down, or
+// back up) via Telegram, if any.
 func checkCameraHealth(cfg *Config, health *cameraHealthState) {
 	det := cfg.Detectors.TankReplenish
 	frame, err := tempJPEGPath()

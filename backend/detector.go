@@ -15,19 +15,6 @@ func mondayZero(t time.Time) int {
 	return (int(t.Weekday()) + 6) % 7
 }
 
-// inScheduleWindow reports whether now falls within a detector's configured
-// day + hour window - the same condition runTankCheck uses below to decide
-// whether to touch the camera at all. Also used to scope checkCameraHealth
-// to the same window for now (see README "Camera health alerts" for the
-// planned follow-up: an independent schedule, e.g. 24x7, for camera health
-// specifically).
-func inScheduleWindow(s ScheduleConfig, now time.Time) bool {
-	if mondayZero(now) != s.DayIndex() {
-		return false
-	}
-	return now.Hour() >= s.WindowStartHour && now.Hour() < s.DeadlineHour
-}
-
 // resolves reports whether every condition in resolveWhen holds against the
 // model's parsed KEY: VALUE fields (AND across the list). Data-driven and
 // intentionally ignorant of specific field names - the prompt defines the
