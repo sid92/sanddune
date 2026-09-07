@@ -130,6 +130,12 @@ first, and if it flags a problem, set `capture.aspect_fix_width_scale` in config
 before doing anything else (applied by `grabFrame` before crop, so crop coordinates
 should always be set against the corrected image).
 
+`cameracheck` also checks the device's clock against this machine's (Hikvision ISAPI
+`/System/time`) - reports the UTC offset both sides are using and whether they agree, since
+`backfill` (below) depends on that assumption and a mismatch would silently pull frames from
+the wrong moment, exactly as happened once during development (see `backfill.go`'s comment
+on `buildPlaybackURL`).
+
 **Crop coordinates are set once, by eye, and stored in config.** There is deliberately no
 GUI (see Roadmap). The setup loop is: operator describes the region roughly → render the
 crop → operator confirms or corrects → repeat. Two or three rounds converge, and no
@@ -271,6 +277,34 @@ failed, after the full report - not before it. `./sanddune` itself also does the
 of this check once at startup, before entering its main loop - `selftest` covers the rest
 (model, notify) and can be re-run any time, not just at startup, including forcing a real
 Telegram send you'd otherwise only see on an actual deadline breach.
+
+### Catching up after downtime
+
+If the machine running `sanddune` was down (crashed, rebooted, asleep) during part of a
+check window, `backfill` re-runs the real detection pipeline against the DVR's own
+historical recording instead of the live feed - Hikvision-specific, since it relies on the
+same ISAPI playback convention `cameracheck`'s clock check verifies:
+
+```bash
+./sanddune backfill -hours=2                    # last 2 hours, ending now
+./sanddune backfill -start=12:00 -end=14:00      # an exact window instead, today's date
+./sanddune backfill -object=tank_near             # only check one configured object
+```
+
+Stops checking an object as soon as it resolves, same as the live service, and saves every
+frame/crop under `state/backfill/<timestamp>/` for inspection. Report-only: it does **not**
+touch `state/tank_replenish.json`, even with the live service running at the same time
+(reads config, never that state file) - decide by hand whether an object that resolved
+during the gap should stop the live service from expecting it, since automatically merging
+into a file the live service might be writing to at the same moment risks a race.
+
+Two real bugs surfaced building this, both worth knowing about before trusting it on a new
+camera: the DVR silently treats query-param timestamps as its own local wall-clock time
+regardless of the ISO8601 "Z" suffix (fixed - see `buildPlaybackURL`, and verify against any
+new device with `cameracheck`'s clock check above rather than assuming), and playback
+connections take measurably longer to establish than live ones, so `grabFrame`'s timeout is
+now a parameter instead of a hardcoded value tuned only for live streaming (`-grab-timeout`,
+default 30s for backfill vs. 10s live).
 
 Cross-compiling for Windows (buildable from macOS, no Windows machine needed for the
 build itself — see [Validation status](#validation-status) for what's confirmed on real

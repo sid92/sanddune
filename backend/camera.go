@@ -8,15 +8,23 @@ import (
 	"time"
 )
 
+// liveGrabTimeout is the right budget for a live RTSP connection - see
+// grabFrame's timeout parameter for why a playback URL needs more.
+const liveGrabTimeout = 10 * time.Second
+
 // grabFrame pulls a single current frame from an RTSP stream using ffmpeg
 // and writes it as a JPEG to savePath. If aspectFixWidthScale > 1, the frame
 // is stretched horizontally by that factor first - see CaptureConfig.
-func grabFrame(rtspURL, savePath string, aspectFixWidthScale float64) error {
+// timeout should be generous for a playback/seek URL (see backfill.go) -
+// live connections settle in well under a second, but a DVR seeking into
+// recorded footage measurably longer, and a too-tight timeout here reads as
+// "camera unreachable" when the real problem is just impatience.
+func grabFrame(rtspURL, savePath string, aspectFixWidthScale float64, timeout time.Duration) error {
 	if rtspURL == "" || rtspURL == "TBD" {
 		return fmt.Errorf("RTSP URL not configured (still 'TBD') - set it before grabbing a frame")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	args := []string{

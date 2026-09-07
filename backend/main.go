@@ -16,10 +16,14 @@ import (
 )
 
 func main() {
-	// "selftest" is a subcommand, not a flag - dispatch before flag.Parse()
-	// touches os.Args, same as go/git/docker-style CLIs.
+	// "selftest"/"backfill" are subcommands, not flags - dispatch before
+	// flag.Parse() touches os.Args, same as go/git/docker-style CLIs.
 	if len(os.Args) > 1 && os.Args[1] == "selftest" {
 		runSelfTest(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "backfill" {
+		runBackfill(os.Args[2:])
 		return
 	}
 
@@ -31,6 +35,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "sanddune takes no flags - it's configured entirely via config.yaml.")
 		fmt.Fprintln(os.Stderr, "Edit config.yaml next to this binary, then run: ./sanddune")
 		fmt.Fprintln(os.Stderr, "Run './sanddune selftest' to verify camera + model + notifications end-to-end.")
+		fmt.Fprintln(os.Stderr, "Run './sanddune backfill -hours=2' to re-check a missed time window (Hikvision only).")
 		fmt.Fprintln(os.Stderr, "See README.md for the config reference.")
 	}
 	flag.Parse()
@@ -57,7 +62,7 @@ func main() {
 
 	log.Printf("checking camera connection...")
 	testFrame := filepath.Join(os.TempDir(), "sanddune_startup_check.jpg")
-	if err := grabFrame(rtspURL, testFrame, cfg.Detectors.TankReplenish.Capture.AspectFixWidthScale); err != nil {
+	if err := grabFrame(rtspURL, testFrame, cfg.Detectors.TankReplenish.Capture.AspectFixWidthScale, liveGrabTimeout); err != nil {
 		// Not fatal: a camera/DVR outage at the moment of launch shouldn't
 		// block the service from starting - checkCameraHealth() (in
 		// runScheduler below) will pick this up, alert once the configured
@@ -135,7 +140,7 @@ func checkCameraHealth(cfg *Config, health *cameraHealthState) {
 	det := cfg.Detectors.TankReplenish
 	frame, err := tempJPEGPath()
 	if err == nil {
-		err = grabFrame(det.RTSPURL, frame, det.Capture.AspectFixWidthScale)
+		err = grabFrame(det.RTSPURL, frame, det.Capture.AspectFixWidthScale, liveGrabTimeout)
 		os.Remove(frame)
 	}
 

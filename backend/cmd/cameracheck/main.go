@@ -83,6 +83,15 @@ func main() {
 		fmt.Println("If this is a Hikvision device, pass those flags for a much stronger signal than the ratio heuristic alone.")
 	}
 
+	if *isapiHost != "" && *isapiUser != "" {
+		fmt.Println("\n=== Step 3: checking the DVR's clock (relevant for backend/backfill.go) ===")
+		if err := checkDeviceTime(*isapiHost, *isapiUser, *isapiPass); err != nil {
+			fmt.Printf("time check failed (non-fatal): %v\n", err)
+		}
+	} else {
+		fmt.Println("\n=== Step 3: skipped (no -isapi-host/-isapi-user given) ===")
+	}
+
 	fmt.Println("\n=== Result ===")
 	if !suspect {
 		fmt.Println("No anamorphic-stream signals found. Proportions are probably fine - still worth a quick visual")
@@ -165,6 +174,63 @@ func grabFrame(rtspURL, savePath string, widthScale float64) error {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%w: %s", err, stderr.String())
+	}
+	return nil
+}
+
+var localTimeRe = regexp.MustCompile(`<localTime>(.*?)</localTime>`)
+
+// checkDeviceTime queries Hikvision ISAPI's /System/time endpoint, which
+// reports the device's own clock WITH an explicit UTC offset (e.g.
+// "2026-09-07T14:45:03+05:30"), and compares it against this machine's
+// clock. backend/backfill.go builds playback URLs by formatting a Go
+// time.Time directly (local wall-clock, no timezone conversion) into the
+// starttime query param, based on one empirical test against one DVR that
+// turned out to just echo those numbers back as its own local time,
+// ignoring the "Z" suffix's actual UTC meaning. That assumption silently
+// breaks if the DVR's configured timezone differs from this machine's, or
+// on different firmware/hardware that actually honors "Z" as real UTC - so
+// don't trust it blind, check it here first.
+func checkDeviceTime(host, user, pass string) error {
+	url := fmt.Sprintf("http://%s/ISAPI/System/time", host)
+	body, err := digestGet(url, user, pass)
+	if err != nil {
+		return err
+	}
+	m := localTimeRe.FindStringSubmatch(body)
+	if m == nil {
+		return fmt.Errorf("<localTime> not found in response: %s", body)
+	}
+	deviceTime, err := time.Parse(time.RFC3339, m[1])
+	if err != nil {
+		return fmt.Errorf("could not parse device time %q: %w", m[1], err)
+	}
+
+	now := time.Now()
+	_, deviceOffsetSec := deviceTime.Zone()
+	_, localOffsetSec := now.Zone()
+	drift := now.Sub(deviceTime)
+	if drift < 0 {
+		drift = -drift
+	}
+
+	fmt.Printf("device reports: %s (UTC offset %+03d:%02d)\n",
+		deviceTime.Format("2006-01-02 15:04:05 -07:00"), deviceOffsetSec/3600, (deviceOffsetSec%3600)/60)
+	fmt.Printf("this machine:   %s (UTC offset %+03d:%02d)\n",
+		now.Format("2006-01-02 15:04:05 -07:00"), localOffsetSec/3600, (localOffsetSec%3600)/60)
+
+	if deviceOffsetSec != localOffsetSec {
+		fmt.Printf("MISMATCH: device's UTC offset differs from this machine's by %s.\n",
+			(time.Duration(localOffsetSec-deviceOffsetSec) * time.Second).String())
+		fmt.Println("backfill.go's playback URLs assume they share a timezone - they don't here.")
+		fmt.Println("Fix buildPlaybackURL() to shift by the difference before formatting, or run backfill")
+		fmt.Println("from a machine in the DVR's own timezone, and re-verify with a real playback pull")
+		fmt.Println("(request a known recent time, check the returned frame's on-screen timestamp).")
+	} else if drift > 2*time.Minute {
+		fmt.Printf("Offsets match, but clocks disagree by %s (out of sync, not a timezone issue) -\n", drift.Round(time.Second))
+		fmt.Println("playback times will be off by roughly that much. Consider fixing the DVR's clock (NTP).")
+	} else {
+		fmt.Println("OK: same UTC offset, clocks agree - backfill.go's local-time assumption holds for this DVR.")
 	}
 	return nil
 }

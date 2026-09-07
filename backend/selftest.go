@@ -78,7 +78,7 @@ func runSelfTest(args []string) {
 		} else {
 			framePath = filepath.Join(outDir, "frame.jpg")
 			start := time.Now()
-			if err := grabFrame(det.RTSPURL, framePath, det.Capture.AspectFixWidthScale); err != nil {
+			if err := grabFrame(det.RTSPURL, framePath, det.Capture.AspectFixWidthScale, liveGrabTimeout); err != nil {
 				report("FAIL", "camera", err.Error())
 			} else {
 				cameraOK = true
