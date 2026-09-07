@@ -330,6 +330,16 @@ connections take measurably longer to establish than live ones, so `grabFrame`'s
 now a parameter instead of a hardcoded value tuned only for live streaming (`-grab-timeout`,
 default 30s for backfill vs. 10s live).
 
+**Concurrency** - a full multi-hour window is a lot of individual DVR seeks at ~10-20s each
+sequentially, so `-workers N` splits the time range into N contiguous chunks and runs them
+as concurrent playback sessions instead. Measured against the real DVR (not assumed): 4
+concurrent sessions complete cleanly at close to the same per-request time as 1 alone (~3x
+net throughput); 6+ starts getting some requests rejected with a clean RTSP `453 Not Enough
+Bandwidth` error rather than hanging, so `grabFrameRetrying` backs off and retries a few
+times specifically on that error. Default is 1 (sequential, unchanged from before this
+existed) - the safe ceiling is what one real device tolerated in one test, not a universal
+number, so raising it is a deliberate choice, not a new default.
+
 Cross-compiling for Windows (buildable from macOS, no Windows machine needed for the
 build itself — see [Validation status](#validation-status) for what's confirmed on real
 Windows hardware):
