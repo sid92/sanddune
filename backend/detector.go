@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -15,12 +14,22 @@ func mondayZero(t time.Time) int {
 	return (int(t.Weekday()) + 6) % 7
 }
 
-// resolves reports whether every condition in resolveWhen holds against the
-// model's parsed KEY: VALUE fields (AND across the list). Data-driven and
+// resolves reports whether resolveWhen holds against the model's parsed
+// KEY: VALUE fields - AND across the list if match is "any" other than
+// "any" (including "", "all", or anything else - "all" is the sane
+// default), OR across the list if match is "any". Data-driven and
 // intentionally ignorant of specific field names - the prompt defines the
 // contract, not the code.
-func resolves(resolveWhen []ResolveCondition, fields map[string]string) bool {
+func resolves(resolveWhen []ResolveCondition, match string, fields map[string]string) bool {
 	if len(resolveWhen) == 0 {
+		return false
+	}
+	if match == "any" {
+		for _, cond := range resolveWhen {
+			if fields[cond.Field] == cond.Equals {
+				return true
+			}
+		}
 		return false
 	}
 	for _, cond := range resolveWhen {
@@ -91,7 +100,7 @@ func runTankCheck(cfg *Config, now time.Time, imageOverride string) (map[string]
 
 			cropRecord, _ := saveDecisionCrop(tankStateName, obj.ID, now, prepped)
 
-			if resolves(det.Action.ResolveWhen, fields) {
+			if resolves(det.Action.ResolveWhen, det.Action.ResolveMatch, fields) {
 				objectsState[obj.ID] = map[string]any{"actioned": true, "at": now.Format("15:04:05"), "crop": cropRecord}
 			} else {
 				objectsState[obj.ID] = map[string]any{"actioned": false, "crop": cropRecord}
@@ -115,14 +124,15 @@ func runTankCheck(cfg *Config, now time.Time, imageOverride string) (map[string]
 
 	notified, _ := st["notified"].(bool)
 	if pastDeadline && !satisfied && !notified {
-		message := fmt.Sprintf(
-			"Not all objects resolved as of %02d:00 on %s. Outstanding: %s. Please check.",
-			deadline, today, strings.Join(outstanding, ", "),
-		)
-		if _, err := sendNotification(cfg, "[Tank check] "+message); err != nil {
+		// Two variants: statusMessage's "Time: ...\n..." template reads well
+		// as a silent Telegram message, but triggerLocalAlarm passes this
+		// straight to `say` - a spoken "Time colon Monday..." would be
+		// awkward, so speech gets the plain summary without that line.
+		summary := "Tank check incomplete: " + strings.Join(outstanding, ", ")
+		if _, err := sendNotification(cfg, statusMessage(summary)); err != nil {
 			return nil, err
 		}
-		triggerLocalAlarm(cfg, message)
+		triggerLocalAlarm(cfg, summary)
 		st["notified"] = true
 	}
 

@@ -61,6 +61,13 @@ type ResolveCondition struct {
 type ActionConfig struct {
 	Prompt      string             `yaml:"prompt"`
 	ResolveWhen []ResolveCondition `yaml:"resolve_when"`
+	// ResolveMatch mirrors TankDetectorConfig.Require's all|any vocabulary,
+	// but for conditions instead of objects: "all" (default) requires every
+	// condition in ResolveWhen to hold, "any" requires just one. Needed once
+	// a single prompt reports more than one independently-sufficient signal
+	// (e.g. either an operator checked the tank, or water was actually being
+	// poured - either one satisfies the SOP, seeing both isn't required).
+	ResolveMatch string `yaml:"resolve_match"`
 }
 
 // ObjectConfig is one target within a detector (e.g. one tank). Crop is a
@@ -185,6 +192,9 @@ func loadConfig() (*Config, error) {
 	}
 	if len(cfg.Detectors.TankReplenish.Action.ResolveWhen) == 0 {
 		cfg.Detectors.TankReplenish.Action.ResolveWhen = []ResolveCondition{{Field: "POURING", Equals: "YES"}}
+	}
+	if cfg.Detectors.TankReplenish.Action.ResolveMatch == "" {
+		cfg.Detectors.TankReplenish.Action.ResolveMatch = "all"
 	}
 	if cfg.Detectors.TankReplenish.Require == "" {
 		cfg.Detectors.TankReplenish.Require = "all"

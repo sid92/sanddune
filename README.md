@@ -73,10 +73,21 @@ Running **InternVL3.5-2B**, quantized to **Q4_K_M** (~1.2GB) via `llama.cpp`, ze
   training recipe, not precision.
 - Earlier prompt iteration found wording mattered more than model size: adding a "what
   is the person doing" field before the yes/no answer improved accuracy on ambiguous
-  frames. The current production prompt has since been simplified further to a single
-  `POURING: YES/NO` question (person-visibility requirement dropped) - validated 4/4
-  against real camera crops, not yet through the same 10-repeated-runs determinism check
-  the earlier prompt got — see [Validation status](#validation-status).
+  frames. The prompt was then simplified to a single `POURING: YES/NO` question
+  (person-visibility requirement dropped) - validated 4/4 against real camera crops.
+- The real SOP turned out to have a case that single question couldn't represent:
+  operators check the water level and only refill if it's actually needed - "checked,
+  no refill needed" and "never checked at all" both look identical to a POURING-only
+  question. Current prompt asks a three-way question instead (checking / pouring /
+  neither) and reports both `CHECKING: YES/NO` and `POURING: YES/NO`, resolved with
+  `resolve_match: any` - either signal alone satisfies the SOP, seeing both isn't
+  required. Framing it as two independent yes/no questions, rather than picking
+  between checking-or-pouring, mattered a lot: an earlier either/or phrasing forced the
+  model to always call one of the two true even when neither was actually happening -
+  19/26 real crops false-flagged as `POURING: YES` under that phrasing, 0/26 once
+  "neither" became an explicit third option. Not yet validated against a real confirmed
+  pour-in-progress frame with this prompt - only real checking/negative examples and the
+  old synthesized test image so far. See [Validation status](#validation-status).
 
 **Next**: fine-tune a smaller (~1B) InternVL checkpoint via LoRA once there's a real
 bank of labeled footage from the deployed cameras — collect real frames (50-200+ per
@@ -179,6 +190,7 @@ detectors:
       resolve_when:
         - field: POURING
           equals: YES
+      resolve_match: all  # all | any - see "Model approach" below
 
     objects:              # omit entirely for a single tank (full frame, no crop)
       - id: tank_left
@@ -297,6 +309,18 @@ touch `state/tank_replenish.json`, even with the live service running at the sam
 (reads config, never that state file) - decide by hand whether an object that resolved
 during the gap should stop the live service from expecting it, since automatically merging
 into a file the live service might be writing to at the same moment risks a race.
+
+**Adaptive sampling** - the DVR's per-seek playback cost (see below) makes uniformly-dense
+sampling over a long window impractical, so `backfill` samples at `-interval` (default:
+`check_interval_seconds`) normally, and ramps down to the tighter `-fine-interval` (default
+10s) the moment a separate check against the *overall* frame (not any one object's crop)
+reports `-ramp-field` equals `-ramp-equals` (default `PERSON_PRESENT`/`YES`, matching
+`prompts/tank_pouring.txt`) - then immediately back to the base interval the next sample
+that field isn't set, no cooldown. This overall-frame check runs unconditionally alongside
+the normal per-object crop checks every sample, never instead of them - what to ramp to next
+doesn't change whether this sample's objects get checked. The field name is a flag, not
+hardcoded, since "what means look closer" is a property of whatever prompt is configured,
+not something backfill.go should assume.
 
 Two real bugs surfaced building this, both worth knowing about before trusting it on a new
 camera: the DVR silently treats query-param timestamps as its own local wall-clock time

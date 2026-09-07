@@ -27,6 +27,11 @@ detectors:
       resolve_when:
         - field: POURING
           equals: YES
+      resolve_match: all   # all | any - "all" (default) requires every condition in
+                            # resolve_when to hold; "any" resolves if just one does.
+                            # Use "any" when the prompt reports multiple independently-
+                            # sufficient signals (e.g. either an operator checked the
+                            # tank, or water was actually poured - either satisfies it).
 
     # One inference call per object per check. Omit this list entirely for a
     # single-tank setup (uses the full frame, no crop). Crop is [x, y, w, h]

@@ -23,4 +23,6 @@ backend/sanddune.exe
 /cameracheck.exe
 backend/cameracheck
 backend/cameracheck.exe
+/sanddune_verify
+/sanddune.log
 camera_captures/

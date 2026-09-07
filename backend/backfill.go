@@ -59,12 +59,31 @@ func parseTodayClockTime(clock string, ref time.Time) (time.Time, error) {
 // concurrently against that same file, and merging findings automatically
 // risks a race with it. Decide by hand whether to edit that file, or just
 // let today's live checks continue and possibly still catch it.
+//
+// Samples at -interval normally, ramping to the tighter -fine-interval
+// whenever -ramp-field equals -ramp-equals (default PERSON_PRESENT=YES,
+// matching prompts/tank_pouring.txt) - dense detail exactly when something's
+// happening, cheap scanning otherwise, since the DVR's ~10s-per-seek
+// playback cost makes uniformly-dense sampling over a long window
+// impractical (see README "Catching up after downtime"). Deliberately a
+// flag, not a hardcoded field name - which field means "look closer" is a
+// property of the prompt in use, not something backfill.go should assume.
+//
+// The ramp check runs once per sample against the OVERALL frame (not any
+// one object's crop) - a person can be near one tank and not the other, and
+// the ramp decision is about the scene as a whole, not any single object.
+// It runs unconditionally alongside, never instead of, the normal per-object
+// crop checks below - what to ramp to doesn't change whether this sample's
+// objects get checked.
 func runBackfill(args []string) {
 	fs := flag.NewFlagSet("backfill", flag.ExitOnError)
 	hours := fs.Float64("hours", 2, "how many hours back to scan, from now - ignored if -start is set")
 	startFlag := fs.String("start", "", "start of an explicit window, \"HH:MM\" (today, local time) - e.g. -start=12:00 -end=14:00")
 	endFlag := fs.String("end", "", "end of an explicit window, \"HH:MM\" (today, local time); defaults to now if -start is set but this isn't")
-	intervalSeconds := fs.Int("interval", 0, "seconds between samples (default: detectors.tank_replenish.check_interval_seconds)")
+	intervalSeconds := fs.Int("interval", 0, "seconds between samples when nothing's happening (default: detectors.tank_replenish.check_interval_seconds)")
+	fineIntervalSeconds := fs.Int("fine-interval", 10, "seconds between samples while ramped up - set equal to -interval to disable ramping")
+	rampField := fs.String("ramp-field", "PERSON_PRESENT", "parsed field that triggers ramping to -fine-interval when it equals -ramp-equals")
+	rampEquals := fs.String("ramp-equals", "YES", "value of -ramp-field that triggers ramping")
 	onlyObject := fs.String("object", "", "only check this object id (default: all configured objects)")
 	grabTimeoutSeconds := fs.Int("grab-timeout", 30, "seconds to wait per playback grab - a DVR seeking into recorded footage is much slower than a live connection")
 	fs.Parse(args)
@@ -127,8 +146,10 @@ func runBackfill(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("=== sanddune backfill: %s to %s, every %ds ===\n",
-		start.Format("15:04:05"), end.Format("15:04:05"), interval)
+	fineInterval := time.Duration(*fineIntervalSeconds) * time.Second
+	baseInterval := time.Duration(interval) * time.Second
+	fmt.Printf("=== sanddune backfill: %s to %s, every %ds (ramping to %ds when %s=%s) ===\n",
+		start.Format("15:04:05"), end.Format("15:04:05"), interval, *fineIntervalSeconds, *rampField, *rampEquals)
 
 	type finding struct {
 		at     string
@@ -140,12 +161,31 @@ func runBackfill(args []string) {
 		pending[o.ID] = o
 	}
 
-	for t := start; t.Before(end) && len(pending) > 0; t = t.Add(time.Duration(interval) * time.Second) {
+	step := baseInterval
+
+	for t := start; t.Before(end) && len(pending) > 0; t = t.Add(step) {
 		playbackURL := buildPlaybackURL(det.RTSPURL, t)
 		framePath := filepath.Join(outDir, "frame_"+t.Format("150405")+".jpg")
 		if err := grabFrame(playbackURL, framePath, det.Capture.AspectFixWidthScale, time.Duration(*grabTimeoutSeconds)*time.Second); err != nil {
 			fmt.Printf("%s  grab failed: %v\n", t.Format("15:04:05"), err)
 			continue
+		}
+
+		// Ramp decision runs once, against the overall (uncropped, but
+		// aspect-corrected) frame - not any one object's crop. This is
+		// deliberately independent of the per-object loop below, which
+		// always runs regardless of what this decides: the ramp signal only
+		// controls how soon the NEXT sample happens, never whether this
+		// sample's objects get checked.
+		activity := false
+		fullFrame := filepath.Join(outDir, "full_"+t.Format("150405")+".jpg")
+		if err := prepObjectFrame(framePath, ObjectConfig{ID: "full"}, det.Capture.MaxEdgePx, det.Capture.Scaler, fullFrame); err != nil {
+			fmt.Printf("%s  ramp-check prep failed: %v\n", t.Format("15:04:05"), err)
+		} else if rampFields, err := runVLM(cfg, fullFrame, det.Action.Prompt); err != nil {
+			fmt.Printf("%s  ramp-check model failed: %v\n", t.Format("15:04:05"), err)
+		} else {
+			fmt.Printf("%s  overall       %v\n", t.Format("15:04:05"), rampFields)
+			activity = rampFields[*rampField] == *rampEquals
 		}
 
 		for id, obj := range pending {
@@ -159,13 +199,26 @@ func runBackfill(args []string) {
 				fmt.Printf("%s  %-12s model failed: %v\n", t.Format("15:04:05"), id, err)
 				continue
 			}
-			if resolves(det.Action.ResolveWhen, fields) {
+			if resolves(det.Action.ResolveWhen, det.Action.ResolveMatch, fields) {
 				fmt.Printf("%s  %-12s RESOLVED %v\n", t.Format("15:04:05"), id, fields)
 				resolved[id] = finding{at: t.Format("15:04:05"), fields: fields}
 				delete(pending, id)
 			} else {
 				fmt.Printf("%s  %-12s not yet %v\n", t.Format("15:04:05"), id, fields)
 			}
+		}
+
+		// Ramp: zoom in to fineInterval the moment the ramp field fires, and
+		// immediately back off to baseInterval the very next sample it
+		// doesn't - no cooldown, the overall-frame check IS the signal.
+		if activity {
+			if step != fineInterval {
+				fmt.Printf("  -> activity detected, sampling every %ds from here\n", *fineIntervalSeconds)
+			}
+			step = fineInterval
+		} else if step != baseInterval {
+			fmt.Printf("  -> no longer present, back to every %ds\n", interval)
+			step = baseInterval
 		}
 	}
 

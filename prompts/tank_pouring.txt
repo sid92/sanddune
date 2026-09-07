@@ -1,4 +1,8 @@
-Is the tank open and is water being poured into it from the top?
+Is a person visible near the tank at all? Separately: is that person checking the tank,
+is the tank open with water being poured into it from the top, or is neither happening
+right now?
 
 Respond in exactly this format:
+PERSON_PRESENT: <YES | NO>
+CHECKING: <YES | NO>
 POURING: <YES | NO>
