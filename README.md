@@ -272,39 +272,6 @@ of this check once at startup, before entering its main loop - `selftest` covers
 (model, notify) and can be re-run any time, not just at startup, including forcing a real
 Telegram send you'd otherwise only see on an actual deadline breach.
 
-### Running as a service (macOS)
-
-`./sanddune` on its own only runs while that terminal session does - it won't survive a
-reboot, a crash, or the user logging out. `install-daemon.sh` installs it as a macOS
-LaunchDaemon instead (system-wide, not tied to any login session - see
-[Deploying to a new machine](#deploying-to-a-new-machine) for why this matters over a
-per-user LaunchAgent):
-
-```bash
-./install-daemon.sh     # starts now, and on every future boot; restarts automatically if it crashes
-```
-
-Requires `sudo` (LaunchDaemons live in `/Library`, not anywhere user-writable) and that
-`./sanddune` and `config.yaml` already exist. Logs go to `sanddune.log` next to the binary,
-since launchd doesn't show stdout/stderr in a terminal. Once installed, a plain `kill` won't
-stop it - `KeepAlive` means launchd just relaunches it immediately - so to edit `config.yaml`
-or rebuild the binary:
-
-```bash
-./pause-daemon.sh       # stop it (survives the pause - not removed from launchd)
-# ... edit config.yaml, or rebuild ./sanddune ...
-./resume-daemon.sh      # start it again, picking up whatever changed
-```
-
-`./uninstall-daemon.sh` removes it from launchd entirely, if you want to go back to running
-it manually. Not yet built for Windows or Linux - there's no daemon/service install script
-for either yet (see Roadmap).
-
-A LaunchDaemon doesn't fix everything, though: system sleep stops the whole process (no
-detection, no camera-health heartbeat, nothing self-reports the gap), so a monitoring
-machine needs sleep disabled entirely in System Settings - that's an OS setting, not
-something `install-daemon.sh` can do for you.
-
 Cross-compiling for Windows (buildable from macOS, no Windows machine needed for the
 build itself — see [Validation status](#validation-status) for what's confirmed on real
 Windows hardware):
@@ -359,12 +326,8 @@ currently requires someone to notice and restart it manually.
   run) — one file plus a model-weights folder. Weights stay separate either way, same as
   every other local-LLM tool (Ollama, LM Studio) — swappable without a rebuild.
 - **Multi-camera fan-out**: one camera per detector today; generalize to N.
-- **Windows/Linux service install**: `install-daemon.sh` (see "Running as a service") only
-  covers macOS LaunchDaemon; no equivalent yet for Windows Task Scheduler/`sc.exe` or
-  systemd.
-- **External watchdog**: a LaunchDaemon recovers from a crash or reboot, but if the whole
-  machine loses power or network, nothing running *on* it can page anyone — the one failure
-  mode a local-only architecture can't self-report without a second, independent observer.
+- **Service supervision**: watchdog that pages the admin if the local machine goes
+  offline — the one failure mode a local-only architecture can't self-report.
 - **Web dashboard + cloud backend**: status visibility and config changes without
   touching the file directly.
 - **USB-triggered physical alarm/beacon**: local alert channel beyond speakers and phone.
