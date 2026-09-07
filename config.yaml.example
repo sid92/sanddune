@@ -9,7 +9,7 @@ detectors:
       day: monday              # monday..sunday
       window_start_hour: 7     # 24h clock
       deadline_hour: 14        # 24h clock - alert fires if not resolved by this hour
-    check_interval_seconds: 10 # how often to sample the camera during the window
+    check_interval_seconds: 60 # how often to sample the camera during the window
 
     capture:
       # aspect_fix_width_scale: 2.0  # only needed for cameras that transmit anamorphic

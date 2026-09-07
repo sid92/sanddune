@@ -175,7 +175,7 @@ func loadConfig() (*Config, error) {
 
 	// sane defaults
 	if cfg.Detectors.TankReplenish.CheckIntervalSeconds == 0 {
-		cfg.Detectors.TankReplenish.CheckIntervalSeconds = 10
+		cfg.Detectors.TankReplenish.CheckIntervalSeconds = 60
 	}
 	if cfg.Detectors.TankReplenish.Schedule.Day == "" {
 		cfg.Detectors.TankReplenish.Schedule.Day = "monday"

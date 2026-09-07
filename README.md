@@ -160,7 +160,7 @@ detectors:
       day: monday
       window_start_hour: 7
       deadline_hour: 14
-    check_interval_seconds: 10
+    check_interval_seconds: 60
 
     capture:
       # aspect_fix_width_scale: 2.0  # only for cameras that transmit anamorphic frames
