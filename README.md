@@ -332,13 +332,39 @@ default 30s for backfill vs. 10s live).
 
 **Concurrency** - a full multi-hour window is a lot of individual DVR seeks at ~10-20s each
 sequentially, so `-workers N` splits the time range into N contiguous chunks and runs them
-as concurrent playback sessions instead. Measured against the real DVR (not assumed): 4
-concurrent sessions complete cleanly at close to the same per-request time as 1 alone (~3x
-net throughput); 6+ starts getting some requests rejected with a clean RTSP `453 Not Enough
-Bandwidth` error rather than hanging, so `grabFrameRetrying` backs off and retries a few
-times specifically on that error. Default is 1 (sequential, unchanged from before this
-existed) - the safe ceiling is what one real device tolerated in one test, not a universal
-number, so raising it is a deliberate choice, not a new default.
+as concurrent playback sessions instead. Default is 1 (sequential, unchanged from before
+this existed) - raising it is a deliberate choice, not a new default, because what's
+actually safe here is genuinely unclear: a brief burst test (a few seconds) showed 4
+concurrent sessions completing cleanly at close to the same per-request time as 1 alone,
+but a real 35-minute run at 4 workers saw a 79% grab failure rate - far worse than the
+burst test predicted, and not fully explained by a ~6 minute laptop sleep that happened
+mid-run (the math doesn't add up to anywhere near that many failures from sleep alone). A
+short synthetic test does not reliably predict sustained real-world behavior here - treat
+any concurrency number as unproven until validated over the length of run you actually
+intend, not a quick check.
+
+**Retries** - `grabFrameRetrying` retries an unbounded number of times with escalating
+backoff (3s, 5s, 10s, capped at 15s) on ANY grab failure, not just a specific error code -
+an earlier version only retried the DVR's `453 Not Enough Bandwidth` response, which missed
+almost every real failure (a laptop sleep event produces "Network is unreachable" instead,
+not 453, and was silently never retried - each one a real sample permanently lost rather
+than a transient blip worth waiting out). This is a tool a human runs and can Ctrl-C, so
+"eventually succeeds or the human notices it's stuck" beats a bounded retry count that
+risks quietly losing samples to what's usually recoverable (sleep, wake, a brief network
+drop).
+
+**Filling gaps** - `-timestamps <file>` re-checks a specific list of `HH:MM:SS` lines
+instead of scanning a `[-start,-end)` range, for topping up exactly what a previous run's
+failures skipped without re-doing everything that already succeeded:
+
+```bash
+grep "grab failed" old-run.log | grep -oE "^[0-9:]+" | sort -u > gaps.txt
+./sanddune backfill -timestamps=gaps.txt -workers=2 -keep-checking
+```
+
+`-workers` still splits the list across concurrent sessions (an even split by index, not by
+how far apart entries happen to be in time). No ramp cadence applies, since there's no
+"next sample" spacing to adjust once the exact list of times to check is already fixed.
 
 Cross-compiling for Windows (buildable from macOS, no Windows machine needed for the
 build itself — see [Validation status](#validation-status) for what's confirmed on real

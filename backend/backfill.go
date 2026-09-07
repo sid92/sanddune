@@ -51,29 +51,36 @@ func parseTodayClockTime(clock string, ref time.Time) (time.Time, error) {
 	return time.Date(y, m, d, hour, minute, 0, 0, ref.Location()), nil
 }
 
-// isBandwidthLimited reports whether a grabFrame error is the DVR's "453
-// Not Enough Bandwidth" RTSP response - measured empirically: this device
-// serves 4 concurrent playback sessions cleanly (~3x sequential throughput)
-// but starts rejecting some requests with this exact, cleanly-detectable
-// error at 6+ concurrent, rather than hanging. Worth a short backoff and
-// retry rather than counting it as a real failure.
-func isBandwidthLimited(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "453")
-}
-
-// grabFrameRetrying wraps grabFrame with a few short-backoff retries
-// specifically for isBandwidthLimited errors - see its comment. Any other
-// error returns immediately, unretried.
-func grabFrameRetrying(rtspURL, savePath string, aspectFixWidthScale float64, timeout time.Duration, maxRetries int) error {
-	var err error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		err = grabFrame(rtspURL, savePath, aspectFixWidthScale, timeout)
-		if err == nil || !isBandwidthLimited(err) {
-			return err
+// grabFrameRetrying wraps grabFrame with unbounded retries and escalating
+// backoff (3s, 5s, 10s, then capped at 15s) - keep trying until a frame
+// actually comes back, rather than giving up on the first failure. Found
+// the hard way that a fixed small retry count on a narrow error match
+// (originally: only the DVR's "453 Not Enough Bandwidth" response) missed
+// almost everything real-world: a ~5min laptop sleep mid-run produced
+// hundreds of "Network is unreachable" failures that weren't 453 at all
+// and so were never retried, and each one was a real sample permanently
+// lost instead of a transient blip worth waiting out. This is a diagnostic
+// tool a human runs and can Ctrl-C, not an unattended service, so
+// "eventually succeeds or the human notices it's stuck" is an acceptable
+// tradeoff against a bounded retry count that risks silently losing
+// samples to what's usually a recoverable condition (sleep, wake, a brief
+// network drop) rather than a truly permanent one (which would fail
+// forever either way, and at least this way it fails LOUDLY and
+// repeatedly instead of once and silently).
+func grabFrameRetrying(rtspURL, savePath string, aspectFixWidthScale float64, timeout time.Duration, label string, shared *backfillShared) error {
+	backoffs := []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 15 * time.Second}
+	for attempt := 1; ; attempt++ {
+		err := grabFrame(rtspURL, savePath, aspectFixWidthScale, timeout)
+		if err == nil {
+			return nil
 		}
-		time.Sleep(3 * time.Second)
+		backoff := backoffs[len(backoffs)-1]
+		if attempt-1 < len(backoffs) {
+			backoff = backoffs[attempt-1]
+		}
+		shared.print("%s  grab attempt %d failed (%v), retrying in %s\n", label, attempt, err, backoff)
+		time.Sleep(backoff)
 	}
-	return err
 }
 
 // backfillShared is the state multiple chunk workers coordinate through:
@@ -149,10 +156,7 @@ func runBackfillChunk(cfg *Config, det TankDetectorConfig, objects []ObjectConfi
 
 		playbackURL := buildPlaybackURL(det.RTSPURL, t)
 		framePath := filepath.Join(outDir, "frame_"+t.Format("150405")+".jpg")
-		if err := grabFrameRetrying(playbackURL, framePath, det.Capture.AspectFixWidthScale, grabTimeout, 3); err != nil {
-			shared.print("%s  grab failed: %v\n", t.Format("15:04:05"), err)
-			continue
-		}
+		grabFrameRetrying(playbackURL, framePath, det.Capture.AspectFixWidthScale, grabTimeout, t.Format("15:04:05"), shared)
 
 		// Ramp decision runs once, against the overall (uncropped, but
 		// aspect-corrected) frame - not any one object's crop. This is
@@ -206,6 +210,142 @@ func runBackfillChunk(cfg *Config, det TankDetectorConfig, objects []ObjectConfi
 	}
 }
 
+// runBackfillTimestamps processes one explicit list of timestamps (not a
+// contiguous range - no ramp cadence to compute, since there's no "next
+// sample" spacing to adjust when the set of times to check is already
+// fixed) - the same per-sample logic as runBackfillChunk otherwise. Used to
+// re-check specific gaps from an earlier run (see -timestamps) instead of
+// re-scanning a whole window just to fill in what a high failure rate
+// skipped the first time.
+func runBackfillTimestamps(cfg *Config, det TankDetectorConfig, objects []ObjectConfig, timestamps []time.Time,
+	outDir string, grabTimeout time.Duration, shared *backfillShared) {
+
+	for _, t := range timestamps {
+		pendingNow := shared.pendingSnapshot(objects)
+		if len(pendingNow) == 0 {
+			return
+		}
+
+		playbackURL := buildPlaybackURL(det.RTSPURL, t)
+		framePath := filepath.Join(outDir, "frame_"+t.Format("150405")+".jpg")
+		grabFrameRetrying(playbackURL, framePath, det.Capture.AspectFixWidthScale, grabTimeout, t.Format("15:04:05"), shared)
+
+		fullFrame := filepath.Join(outDir, "full_"+t.Format("150405")+".jpg")
+		if err := prepObjectFrame(framePath, ObjectConfig{ID: "full"}, det.Capture.MaxEdgePx, det.Capture.Scaler, fullFrame); err != nil {
+			shared.print("%s  ramp-check prep failed: %v\n", t.Format("15:04:05"), err)
+		} else if rampFields, err := runVLM(cfg, fullFrame, det.Action.Prompt); err != nil {
+			shared.print("%s  ramp-check model failed: %v\n", t.Format("15:04:05"), err)
+		} else {
+			shared.print("%s  overall       %v\n", t.Format("15:04:05"), rampFields)
+		}
+
+		for _, obj := range pendingNow {
+			id := obj.ID
+			objFrame := filepath.Join(outDir, fmt.Sprintf("%s_%s.jpg", id, t.Format("150405")))
+			if err := prepObjectFrame(framePath, obj, det.Capture.MaxEdgePx, det.Capture.Scaler, objFrame); err != nil {
+				shared.print("%s  %-12s crop failed: %v\n", t.Format("15:04:05"), id, err)
+				continue
+			}
+			fields, err := runVLM(cfg, objFrame, det.Action.Prompt)
+			if err != nil {
+				shared.print("%s  %-12s model failed: %v\n", t.Format("15:04:05"), id, err)
+				continue
+			}
+			if resolves(det.Action.ResolveWhen, det.Action.ResolveMatch, fields) {
+				shared.print("%s  %-12s RESOLVED %v\n", t.Format("15:04:05"), id, fields)
+				shared.markResolved(id, t.Format("15:04:05"), fields)
+			} else {
+				shared.print("%s  %-12s not yet %v\n", t.Format("15:04:05"), id, fields)
+			}
+		}
+	}
+}
+
+// runBackfillFillGaps reads "HH:MM:SS" lines from timestampsPath, splits
+// them into contiguous slices across workers concurrent goroutines (an even
+// split of the list by index, unrelated to how far apart in time consecutive
+// entries happen to be - the list is whatever specific gaps the caller wants
+// re-checked, not a range worth chunking by duration), and runs
+// runBackfillTimestamps on each slice.
+func runBackfillFillGaps(cfg *Config, det TankDetectorConfig, objects []ObjectConfig, timestampsPath string, workers, grabTimeoutSeconds int, keepChecking bool) {
+	data, err := os.ReadFile(timestampsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FAIL  -timestamps %q: %v\n", timestampsPath, err)
+		os.Exit(1)
+	}
+	now := time.Now()
+	var timestamps []time.Time
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var hour, minute, second int
+		if _, err := fmt.Sscanf(line, "%d:%d:%d", &hour, &minute, &second); err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL  bad line %q in %s: expected \"HH:MM:SS\": %v\n", line, timestampsPath, err)
+			os.Exit(1)
+		}
+		y, m, d := now.Date()
+		timestamps = append(timestamps, time.Date(y, m, d, hour, minute, second, 0, now.Location()))
+	}
+	if len(timestamps) == 0 {
+		fmt.Fprintf(os.Stderr, "FAIL  no timestamps found in %s\n", timestampsPath)
+		os.Exit(1)
+	}
+	if workers < 1 {
+		fmt.Fprintf(os.Stderr, "FAIL  -workers must be at least 1, got %d\n", workers)
+		os.Exit(1)
+	}
+	outDir := filepath.Join(stateDir, "backfill", now.Format("20060102_150405"))
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "FAIL  could not create %s: %v\n", outDir, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("=== sanddune backfill: filling %d gap(s) from %s, %d worker(s) ===\n", len(timestamps), timestampsPath, workers)
+
+	shared := &backfillShared{
+		pending: map[string]ObjectConfig{},
+		resolved: map[string]struct {
+			at     string
+			fields map[string]string
+		}{},
+		keepChecking: keepChecking,
+	}
+	for _, o := range objects {
+		shared.pending[o.ID] = o
+	}
+
+	var wg sync.WaitGroup
+	chunkSize := (len(timestamps) + workers - 1) / workers
+	for w := 0; w < workers; w++ {
+		lo := w * chunkSize
+		hi := lo + chunkSize
+		if lo >= len(timestamps) {
+			break
+		}
+		if hi > len(timestamps) {
+			hi = len(timestamps)
+		}
+		wg.Add(1)
+		go func(slice []time.Time) {
+			defer wg.Done()
+			runBackfillTimestamps(cfg, det, objects, slice, outDir, time.Duration(grabTimeoutSeconds)*time.Second, shared)
+		}(timestamps[lo:hi])
+	}
+	wg.Wait()
+
+	fmt.Println("\n=== summary ===")
+	for _, o := range objects {
+		if f, ok := shared.resolved[o.ID]; ok {
+			fmt.Printf("%-12s RESOLVED at %s\n", o.ID, f.at)
+		} else {
+			fmt.Printf("%-12s never resolved among the filled-in gaps\n", o.ID)
+		}
+	}
+	fmt.Println("\nImages saved to " + outDir)
+}
+
 // runBackfill re-runs the real detection pipeline (grabFrame against
 // historical playback, prepObjectFrame, runVLM, resolves) across a past
 // time window instead of the live camera - for catching up after sanddune
@@ -227,15 +367,19 @@ func runBackfillChunk(cfg *Config, det TankDetectorConfig, objects []ObjectConfi
 //
 // -workers splits [start,end) into that many contiguous, disjoint
 // sub-ranges and runs them concurrently (runBackfillChunk), each with its
-// own local ramp state. Measured against the real DVR: 4 concurrent
-// playback sessions complete cleanly at roughly the same per-request time
-// as 1 alone (~3x net throughput); 6+ starts getting rejected with a clean
-// RTSP "453 Not Enough Bandwidth" error rather than hanging, so
-// grabFrameRetrying backs off and retries a few times on exactly that
-// error. Default is 1 (sequential, the original behavior) - raise it
-// deliberately, not as a silent default, since the safe concurrency ceiling
-// is specific to what one real device tolerated on one test and could
-// differ elsewhere.
+// own local ramp state. Default is 1 (sequential, the original behavior) -
+// raise it deliberately, not as a silent default: a brief burst test showed
+// 4 concurrent playback sessions completing cleanly at close to the same
+// per-request time as 1 alone, but a real 35-minute run at 4 workers saw a
+// 79% grab failure rate, far worse than that quick test predicted and not
+// fully explained by the one ~6min sleep interruption that happened during
+// it. A short synthetic test does not reliably predict this device's
+// behavior under sustained concurrent load - don't trust a worker count
+// that hasn't been validated over the actual length of run you intend.
+// grabFrameRetrying (unbounded retries, not just on one specific error
+// code) is what actually makes any worker count usable in practice, by
+// eventually recovering from whatever transient failures concurrency
+// produces rather than requiring a lucky failure-free run.
 func runBackfill(args []string) {
 	fs := flag.NewFlagSet("backfill", flag.ExitOnError)
 	hours := fs.Float64("hours", 2, "how many hours back to scan, from now - ignored if -start is set")
@@ -249,6 +393,7 @@ func runBackfill(args []string) {
 	grabTimeoutSeconds := fs.Int("grab-timeout", 30, "seconds to wait per playback grab - a DVR seeking into recorded footage is much slower than a live connection")
 	keepChecking := fs.Bool("keep-checking", false, "keep checking every object every sample even after it resolves, instead of stopping (like the live service does) - gives a complete row per timestamp for review, at the cost of extra inference calls")
 	workers := fs.Int("workers", 1, "concurrent playback sessions, each covering its own slice of the time window - see the runBackfill doc comment for what's actually been measured safe")
+	timestampsFile := fs.String("timestamps", "", "path to a file of \"HH:MM:SS\" lines (one per line, today's date) to re-check specifically, instead of scanning a [-start,-end) range - for filling in gaps a previous run's failures left behind, without re-doing everything that already succeeded. Ignores -hours/-start/-end/-fine-interval/-ramp-* when set; -workers still splits the list across concurrent sessions.")
 	fs.Parse(args)
 
 	cfg, err := loadConfig()
@@ -276,6 +421,11 @@ func runBackfill(args []string) {
 			os.Exit(1)
 		}
 		objects = filtered
+	}
+
+	if *timestampsFile != "" {
+		runBackfillFillGaps(cfg, det, objects, *timestampsFile, *workers, *grabTimeoutSeconds, *keepChecking)
+		return
 	}
 
 	var start, end time.Time
