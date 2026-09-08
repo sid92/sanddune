@@ -428,7 +428,38 @@ currently requires someone to notice and restart it manually.
 
 ## Validation status
 
-**Verified:**
+> **Sections below marked (superseded) describe the per-tank, action-classification
+> design that was replaced by presence + dwell time.** They are kept because the
+> measurements are real and explain why the design changed, but `tank_near`/`tank_far`,
+> `POURING: YES` and per-object attribution no longer exist in `config.yaml`.
+
+**Verified on a full day of real footage (723 frames, 2026-09-07, 09:00-14:00):**
+- The model answers presence reliably and action not at all. Roughly a dozen prompt
+  variants were run over the whole day. Every action-phrased prompt failed: "filling the
+  tank with a bottle of water" described a person holding a bottle in a frame containing
+  nobody; "checking the tank level" fired on 36/36 empty rooms while catching only 4
+  scattered frames of a real 2-minute episode; "being checked or worked on" answered YES
+  on all 26 frames tested.
+- Naming a concrete object does not fix confabulation. "Is a person holding a water
+  bottle or water container?" was asked of the 35 frames where presence was detected,
+  and answered YES on 18 of them. **The site operator confirmed no refill occurred during
+  any of those frames**, and all 18 were checked by eye at full resolution - no bottle,
+  jug or container appears in any of them. Precision 0%. Recall is unmeasurable: the day
+  contains no refill, so there is no positive case to miss. This is why the pipeline has
+  no bottle step. (Reproduce: `state/bottle_results.csv`, review page
+  `state/bottle_review.html` - both gitignored, they embed real footage.)
+- The model cannot condition on a drawn bounding box, shown three ways: naming the box's
+  colour, swapping which colour marks which tank, and stating the scene as fact all
+  produced "yes to whichever box you ask about". Raising resolution to 896px and full
+  1920px made it worse, not better, so this is not a detail-visibility problem.
+- A physical crop works where a drawn box does not: cropping to both tanks and asking
+  only about presence scored 11/12 on a hand-checked window. ffmpeg does the framing the
+  model cannot.
+- Dwell time as an action proxy: requiring presence to hold for 120s cut 7 detected
+  episodes to 3 on that day's data, removing every single-frame blip while keeping the
+  verified event. `applyDwell` is unit-tested as a pure function (`backend/dwell_test.go`).
+
+**Verified (infrastructure, still current):**
 - Detector state machine: deadline tracking, single-fire notification, day/window
   gating, per-object resolution — tested end-to-end via Go integration tests
   (`backend/detector_test.go`) against the real inference pipeline.
@@ -473,7 +504,7 @@ currently requires someone to notice and restart it manually.
   priority rather than a nice-to-have, especially for cameras with more than 2 objects.
   `check_interval_seconds: 10` is not achievable on that hardware as currently built.
 
-**Crop coordinates: corrected once, still unconfirmed:**
+**Crop coordinates (superseded - single `tank_area` crop now, no per-tank boxes):**
 - An earlier `tank_near` box (my own widened substitution, not Sid's) was confirmed
   wrong - wide enough to span *both* tanks, so a pour at either would have incorrectly
   resolved both objects. `config.yaml` now uses Sid's exact coordinates instead, read
