@@ -113,8 +113,10 @@ type TankDetectorConfig struct {
 	// confabulated or missed. Dwell time is a proxy for the action: someone
 	// standing at the tank for two minutes is servicing it; someone caught
 	// in a single frame is usually walking past, or a false positive.
-	// On a real day's footage this cut 7 detected episodes to 3, removing
-	// every single-frame blip while keeping the one verified event.
+	// On a real day's footage (723 frames, 09:00-14:00) presence fired on 35
+	// frames forming 14 continuous runs; exactly one reached 120s and resolved.
+	// The other 13 were runs of one or two frames - 30s at most - so nothing
+	// that looked like actual work was discarded.
 	DwellSeconds int `yaml:"dwell_seconds"`
 }
 

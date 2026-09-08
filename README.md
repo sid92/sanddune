@@ -455,9 +455,15 @@ currently requires someone to notice and restart it manually.
 - A physical crop works where a drawn box does not: cropping to both tanks and asking
   only about presence scored 11/12 on a hand-checked window. ffmpeg does the framing the
   model cannot.
-- Dwell time as an action proxy: requiring presence to hold for 120s cut 7 detected
-  episodes to 3 on that day's data, removing every single-frame blip while keeping the
-  verified event. `applyDwell` is unit-tested as a pure function (`backend/dwell_test.go`).
+- Dwell time as an action proxy, measured over the full day: presence fired on 35 of 723
+  frames, forming 14 continuous runs. Exactly one reached 120s - 12:31:20 to 12:34:30, 20
+  consecutive positives, 190s - and it is the episode confirmed by eye as two workers
+  servicing the tanks. The other 13 runs were one or two frames, 30s at most. Replaying at
+  the live 60s interval gives the same answer: the object resolves once, at 12:33:00.
+  So on that day: 1 detection, 1 true positive, 0 false positives, and correctly no alert
+  (resolving means the SOP was met - the alert only fires at the deadline if nothing did).
+  Recall past that one event is not established; the day contains no second known episode
+  to catch. `applyDwell` is unit-tested as a pure function (`backend/dwell_test.go`).
 
 **Verified (infrastructure, still current):**
 - Detector state machine: deadline tracking, single-fire notification, day/window
