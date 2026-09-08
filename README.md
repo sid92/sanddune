@@ -172,9 +172,7 @@ report good news that occurred at 12:33 would make the alert useless for anyone 
 to it. Fires as soon as presence has held for `dwell_seconds`, then never again that day.
 
 ```
-✅ Employees were seen at tanks for >2min.
-
-Seen at: 12:31 PM
+✅ Employees were seen at tanks for >2min at 12:31 PM.
 
 Date: 07/09 Mon
 ```
@@ -184,7 +182,7 @@ detections, not the frame that happened to cross the threshold — the first fra
 someone mid-arrival and the last catches them leaving, so the middle is likeliest to show
 the work itself.
 
-`Seen at` is when the run *started*, not when the threshold tipped over. With a 60s
+The time given is when the run *started*, not when the threshold tipped over. With a 60s
 interval and 120s dwell those differ by two minutes, and the earlier one is the honest
 answer to "when were they seen".
 

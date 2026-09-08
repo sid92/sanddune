@@ -31,8 +31,7 @@ func TestDwellLabel(t *testing.T) {
 func TestCompliantMessage(t *testing.T) {
 	// 2026-09-07 is a Monday - the day the validation footage came from.
 	seenAt := time.Date(2026, 9, 7, 12, 31, 20, 0, time.Local)
-	want := "✅ Employees were seen at tanks for >2min.\n\n" +
-		"Seen at: 12:31 PM\n\n" +
+	want := "✅ Employees were seen at tanks for >2min at 12:31 PM.\n\n" +
 		"Date: 07/09 Mon"
 	if got := compliantMessage(seenAt, 120); got != want {
 		t.Errorf("compliantMessage:\n got %q\nwant %q", got, want)
@@ -43,8 +42,8 @@ func TestCompliantMessageTracksDwellConfig(t *testing.T) {
 	// The stated duration must follow dwell_seconds, or the message would
 	// claim a threshold the detector never applied.
 	seenAt := time.Date(2026, 9, 7, 9, 5, 0, 0, time.Local)
-	if got := compliantMessage(seenAt, 180); got != "✅ Employees were seen at tanks for >3min.\n\n"+
-		"Seen at: 09:05 AM\n\nDate: 07/09 Mon" {
+	if got := compliantMessage(seenAt, 180); got != "✅ Employees were seen at tanks for >3min at 09:05 AM.\n\n"+
+		"Date: 07/09 Mon" {
 		t.Errorf("dwell_seconds=180 should read >3min, got %q", got)
 	}
 }

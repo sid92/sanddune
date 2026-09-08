@@ -42,7 +42,7 @@ func dwellLabel(dwellSeconds int) string {
 // later moment the threshold happened to tip over.
 func compliantMessage(seenAt time.Time, dwellSeconds int) string {
 	return fmt.Sprintf(
-		"✅ Employees were seen at tanks for >%s.\n\nSeen at: %s\n\nDate: %s",
+		"✅ Employees were seen at tanks for >%s at %s.\n\nDate: %s",
 		dwellLabel(dwellSeconds),
 		seenAt.Format("03:04 PM"),
 		seenAt.Format("02/01 Mon"),
