@@ -40,6 +40,29 @@ func resolves(resolveWhen []ResolveCondition, match string, fields map[string]st
 	return true
 }
 
+// applyDwell tracks how long the resolve condition has held continuously.
+// prevSince is when the current unbroken run of positive frames started (0
+// if there is no run in progress). A negative frame clears the run, so
+// credit never accumulates across a gap. Returns whether the object is now
+// actioned, the run's start time to persist, and how long it has run.
+//
+// dwellSeconds <= 0 means no dwell requirement: any single positive frame
+// resolves, which is the behaviour this predates.
+func applyDwell(prevSince int64, hit bool, now time.Time, dwellSeconds int) (actioned bool, since, dwelled int64) {
+	if !hit {
+		return false, 0, 0
+	}
+	if dwellSeconds <= 0 {
+		return true, 0, 0
+	}
+	since = prevSince
+	if since <= 0 {
+		since = now.Unix() // first frame of a new run
+	}
+	dwelled = now.Unix() - since
+	return dwelled >= int64(dwellSeconds), since, dwelled
+}
+
 func runTankCheck(cfg *Config, now time.Time, imageOverride string) (map[string]any, error) {
 	det := cfg.Detectors.TankReplenish
 	checkDay := det.Schedule.DayIndex()
@@ -99,12 +122,22 @@ func runTankCheck(cfg *Config, now time.Time, imageOverride string) (map[string]
 			}
 
 			cropRecord, _ := saveDecisionCrop(tankStateName, obj.ID, now, prepped)
+			hit := resolves(det.Action.ResolveWhen, det.Action.ResolveMatch, fields)
 
-			if resolves(det.Action.ResolveWhen, det.Action.ResolveMatch, fields) {
-				objectsState[obj.ID] = map[string]any{"actioned": true, "at": now.Format("15:04:05"), "crop": cropRecord}
-			} else {
-				objectsState[obj.ID] = map[string]any{"actioned": false, "crop": cropRecord}
+			var prevSince int64
+			if p, ok := objState["since_unix"].(float64); ok {
+				prevSince = int64(p)
 			}
+			actioned, since, dwelled := applyDwell(prevSince, hit, now, det.DwellSeconds)
+			entry := map[string]any{"actioned": actioned, "crop": cropRecord}
+			if since > 0 {
+				entry["since_unix"] = since
+				entry["dwelled_s"] = dwelled
+			}
+			if actioned {
+				entry["at"] = now.Format("15:04:05")
+			}
+			objectsState[obj.ID] = entry
 		}
 	}
 

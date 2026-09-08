@@ -102,6 +102,20 @@ type TankDetectorConfig struct {
 	Objects              []ObjectConfig     `yaml:"objects"`
 	Require              string             `yaml:"require"` // "all" or "any"
 	CameraHealth         CameraHealthConfig `yaml:"camera_health"`
+	// DwellSeconds requires the resolve condition to hold continuously for
+	// this long before an object counts as actioned - a single positive
+	// frame no longer resolves it. 0 disables the requirement (any single
+	// positive resolves, the original behaviour).
+	//
+	// This exists because the model can reliably answer "is a person here"
+	// but NOT "is this person checking the tank" - measured extensively
+	// against a full day of real footage, every action-phrased prompt either
+	// confabulated or missed. Dwell time is a proxy for the action: someone
+	// standing at the tank for two minutes is servicing it; someone caught
+	// in a single frame is usually walking past, or a false positive.
+	// On a real day's footage this cut 7 detected episodes to 3, removing
+	// every single-frame blip while keeping the one verified event.
+	DwellSeconds int `yaml:"dwell_seconds"`
 }
 
 // objectsOrDefault returns the configured objects, or a single synthetic

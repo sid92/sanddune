@@ -1,0 +1,4 @@
+Are there any people in this image?
+
+Respond in exactly this format:
+PEOPLE: <YES | NO>
