@@ -61,12 +61,21 @@ detectors:
 
     require: all   # all | any - whether every object or just one must resolve
 
+    # DVR reachability, checked 24x7 on its own cadence - an outage doesn't
+    # wait for business hours, so this is independent of the schedule above.
+    # One alert when it goes down, one when it comes back; never a repeat in
+    # between, and a restart mid-outage won't re-fire the first one.
     camera_health:
-      interval_seconds: 30 # runs 24x7, independent of the schedule above -
-                           # a lightweight single-frame grab this often, all day
-      miss_threshold: 2    # consecutive failed pulls before sending a "camera
-                           # unreachable" alert. A "back online" alert fires
-                           # once on recovery.
+      interval_seconds: 900  # 15 min. An outage lasts hours and needs someone
+                             # to physically go and look, so hearing about it
+                             # a few minutes sooner changes nothing - while
+                             # polling every 30s would hit the DVR ~2,900
+                             # times a day for that non-difference.
+      miss_threshold: 2      # consecutive failures before alerting. 1 would
+                             # alert on any single dropped frame; 2 rides out
+                             # the transient RTSP failures a DVR does throw
+                             # (453 Not Enough Bandwidth, brief timeouts).
+                             # Worst case: 30 min from outage to alert.
 
 notifications:
   telegram:

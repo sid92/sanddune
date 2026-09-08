@@ -243,8 +243,8 @@ detectors:
     require: all          # all | any
 
     camera_health:
-      interval_seconds: 30  # 24x7, independent of the schedule above - see below
-      miss_threshold: 2     # consecutive failed pulls before alerting
+      interval_seconds: 900  # 15 min, 24x7, independent of the schedule - see below
+      miss_threshold: 2      # consecutive failures before alerting
 
 notifications:
   telegram:
@@ -267,10 +267,9 @@ Re-read on every check — edits take effect without a restart.
 ### Camera health alerts
 
 Runs 24x7 in its own goroutine, on its own fixed cadence
-(`camera_health.interval_seconds`, default 30s) - fully independent of the tank detector's
-schedule, since a DVR/network outage doesn't wait for business hours. Each check is one
-throwaway single-frame grab, immediately discarded - deliberately lightweight since it runs
-around the clock rather than only during a narrow window. After
+(`camera_health.interval_seconds`, default 900s / 15 min) - fully independent of the tank
+detector's schedule, since a DVR/network outage doesn't wait for business hours. Each check
+is one throwaway single-frame grab, immediately discarded. After
 `camera_health.miss_threshold` (default 2) consecutive failed pulls it sends one Telegram
 alert, then one more when a pull succeeds again - both as the same short two-line template:
 
@@ -282,6 +281,14 @@ DVR offline
 (`DVR online` on recovery). The verbose ffmpeg error behind a failure goes to the local log
 only, never into the Telegram text. Neither message repeats while the state holds - one
 alert per transition, not per tick, so a multi-hour outage doesn't flood the chat.
+
+**Why 15 minutes and not 30 seconds.** Worst case this is 30 min from outage to alert
+(two misses at 15 min apart), which sounds slow until you ask what changes if you learn
+sooner: an outage lasts hours and needs someone to physically go and look at the DVR.
+Polling every 30s buys no useful reaction time and costs ~2,900 DVR hits a day. The
+threshold matters more than the interval - this DVR does throw transient RTSP failures
+(453 Not Enough Bandwidth, brief timeouts), and requiring two in a row is what keeps those
+from paging anyone.
 
 The down/up state (not the miss count) is persisted to `state/camera_health.json`
 specifically so this holds across restarts too - a crash, an `update.sh`, or just manually

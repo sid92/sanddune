@@ -222,7 +222,12 @@ func loadConfig() (*Config, error) {
 		cfg.Detectors.TankReplenish.CameraHealth.MissThreshold = 2
 	}
 	if cfg.Detectors.TankReplenish.CameraHealth.IntervalSeconds == 0 {
-		cfg.Detectors.TankReplenish.CameraHealth.IntervalSeconds = 30
+		// 15 minutes, not seconds: an outage is measured in hours and someone
+		// has to physically go and look at the DVR, so learning about it a few
+		// minutes sooner changes nothing while polling every 30s hammers the
+		// DVR ~2,900 times a day for that non-difference. Combined with the
+		// default miss_threshold of 2, worst-case time to alert is 30 minutes.
+		cfg.Detectors.TankReplenish.CameraHealth.IntervalSeconds = 900
 	}
 	if cfg.Model.Path == "" {
 		cfg.Model.Path = "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"
