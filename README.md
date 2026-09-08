@@ -163,6 +163,50 @@ alongside the parsed fields, so "why didn't it fire" is answered by looking at w
 model actually saw. Those saved crops double as real labelled frames for a representative
 eval set and for the LoRA work below.
 
+## Notifications
+
+Two messages, one per day at most, with deliberately opposite timing.
+
+**Compliant — sent the moment it happens, not at the deadline.** Waiting until 14:00 to
+report good news that occurred at 12:33 would make the alert useless for anyone reacting
+to it. Fires as soon as presence has held for `dwell_seconds`, then never again that day.
+
+```
+✅ Employees were seen at tanks for >2min.
+
+Seen at: 12:31 PM
+
+Date: 07/09 Mon
+```
+
+Sent with a photo attached. The proof frame is the **middle** of the run of consecutive
+detections, not the frame that happened to cross the threshold — the first frame catches
+someone mid-arrival and the last catches them leaving, so the middle is likeliest to show
+the work itself.
+
+`Seen at` is when the run *started*, not when the threshold tipped over. With a 60s
+interval and 120s dwell those differ by two minutes, and the earlier one is the honest
+answer to "when were they seen".
+
+**Breach — can only be sent at the deadline.** Until 14:00 the day can still be saved by
+someone turning up, so this one genuinely has to wait. It also triggers the local speaker
+alarm (which gets a plain-text summary instead, since `say` would otherwise read the emoji
+and the "Date:" line out loud).
+
+```
+❌ Employees did NOT check or refill tanks. Monitored 7am-2pm.
+
+Date: 07/09 Mon
+```
+
+Everything variable in both messages is derived from config — the window hours from
+`schedule`, the duration from `dwell_seconds` — so changing the schedule cannot leave the
+text asserting a window that was never watched. The exact wording is asserted byte-for-byte
+in `backend/messages_test.go`.
+
+Once every object has resolved, the remaining cycles skip the camera pull and inference
+entirely; there is nothing left to look for.
+
 ## Configuration
 
 Copy `config.yaml.example` to `config.yaml` and fill in real values. `config.yaml` is

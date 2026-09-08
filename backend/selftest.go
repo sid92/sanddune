@@ -67,7 +67,7 @@ func runSelfTest(args []string) {
 		report("OK", "config", "rtsp_url is set")
 	}
 
-	var outDir, framePath string
+	var outDir, framePath, proofPath string
 	cameraOK := false
 	if placeholderRTSP {
 		report("SKIP", "camera", "rtsp_url not configured, nothing to pull from")
@@ -119,19 +119,30 @@ func runSelfTest(args []string) {
 				continue
 			}
 			report("OK", "model:"+obj.ID, fmt.Sprintf("%v (%.1fs)", fields, time.Since(start).Seconds()))
+			if proofPath == "" {
+				proofPath = objFrame
+			}
 		}
 	}
 
 	if !*notify {
 		report("SKIP", "notify", "-notify=false")
 	} else {
+		// Send with a photo when there's a crop to attach, because that is
+		// the path the compliant alert actually uses - a text-only test would
+		// leave sendPhoto (multipart upload, a different endpoint) unproven
+		// until the first real detection.
 		msg := fmt.Sprintf("[sanddune selftest] Test message as of %s.", time.Now().Format("15:04:05"))
-		sent, err := sendNotification(cfg, msg)
+		sent, err := sendNotificationPhoto(cfg, msg, proofPath)
+		with := "text only (no crop available - camera or model check failed)"
+		if proofPath != "" {
+			with = "with proof photo " + filepath.Base(proofPath)
+		}
 		switch {
 		case err != nil:
 			report("FAIL", "notify", err.Error())
 		case sent:
-			report("OK", "notify", "real Telegram message sent - check your phone")
+			report("OK", "notify", "real Telegram message sent, "+with+" - check your phone")
 		default:
 			report("OK", "notify", "DRY RUN only - notifications.telegram not configured in config.yaml")
 		}

@@ -120,3 +120,74 @@ func TestTankCheckAgainstValidatedImages(t *testing.T) {
 
 	os.Remove(filepath.Join(stateDir, tankStateName+".json"))
 }
+
+// TestCompliantNotificationFiresOnceOnResolve covers the timing rule that
+// distinguishes the two messages: the compliant one is sent the moment dwell
+// is satisfied - mid-window, not at the deadline - and never again that day.
+// Telegram and the speaker are explicitly blanked so a passing test can't
+// send a real message or wake the room.
+func TestCompliantNotificationFiresOnceOnResolve(t *testing.T) {
+	personImage := filepath.Join(projectRoot, "test_images", "img04.jpg") // person by a tank
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	cfg.Notifications.Telegram = TelegramConfig{}
+	cfg.LocalAlarm.Enabled = false
+	cfg.Detectors.TankReplenish.Schedule.Day = "monday"
+	cfg.Detectors.TankReplenish.Schedule.WindowStartHour = 0
+	cfg.Detectors.TankReplenish.Schedule.DeadlineHour = 23
+	cfg.Detectors.TankReplenish.Objects = nil
+	cfg.Detectors.TankReplenish.DwellSeconds = 120
+
+	os.Remove(filepath.Join(stateDir, tankStateName+".json"))
+	monday := time.Date(2026, 8, 31, 9, 0, 0, 0, time.Local)
+
+	stateOf := func(result map[string]any) map[string]any {
+		return result["state"].(map[string]any)
+	}
+
+	// Sampling at 60s, dwell 120s: the third consecutive detection resolves.
+	for i, offset := range []int{0, 60, 120} {
+		result, err := runTankCheck(cfg, monday.Add(time.Duration(offset)*time.Second), personImage)
+		if err != nil {
+			t.Fatalf("runTankCheck at +%ds: %v", offset, err)
+		}
+		st := stateOf(result)
+		obj := st["objects"].(map[string]any)["default"].(map[string]any)
+		if actioned, _ := obj["actioned"].(bool); actioned {
+			if i < 2 {
+				t.Fatalf("resolved after only %d consecutive detections, want 3", i+1)
+			}
+		} else if i == 2 {
+			t.Fatalf("third consecutive detection should resolve, state: %v", obj)
+		}
+
+		notified, _ := st["success_notified"].(bool)
+		if want := i == 2; notified != want {
+			t.Errorf("after %d detections: success_notified=%v, want %v", i+1, notified, want)
+		}
+		// The breach message must never go out on a compliant day.
+		if breached, _ := st["notified"].(bool); breached {
+			t.Error("breach notification fired on a day that resolved")
+		}
+	}
+
+	// A later cycle must not re-send, and must not re-run inference either.
+	result, err := runTankCheck(cfg, monday.Add(200*time.Second), personImage)
+	if err != nil {
+		t.Fatalf("runTankCheck after resolution: %v", err)
+	}
+	st := stateOf(result)
+	if notified, _ := st["success_notified"].(bool); !notified {
+		t.Error("success_notified should stay true for the rest of the day")
+	}
+	obj := st["objects"].(map[string]any)["default"].(map[string]any)
+	if crops := stringList(obj["run_crops"]); len(crops) != 3 {
+		t.Errorf("run should still hold its 3 proof frames, got %d", len(crops))
+	}
+	if proofCrop(stringList(obj["run_crops"])) == "" {
+		t.Error("a resolved object must be able to produce a proof frame")
+	}
+}
