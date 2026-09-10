@@ -82,6 +82,16 @@ notifications:
     bot_token: ""   # from @BotFather on Telegram
     chat_id: "TBD"  # the chat/user/group to notify - message your bot once, then GET
                      # https://api.telegram.org/bot<TOKEN>/getUpdates to find it
+    # To alert more than one person, either add them here as a list, or (better
+    # for a team) make a Telegram group, add the bot to it, and use the group's
+    # id as chat_id above - group ids are negative, e.g. "-1001234567890".
+    # A group keeps everyone on the same alert and lets you add people later
+    # without editing config; separate chats keep working one-by-one if the bot
+    # is removed from the group. chat_id and chat_ids are unioned, so you can
+    # use either or both.
+    # chat_ids:
+    #   - "111111111"
+    #   - "222222222"
 
 model:
   path: "gguf/v35/OpenGVLab_InternVL3_5-2B-Q4_K_M.gguf"

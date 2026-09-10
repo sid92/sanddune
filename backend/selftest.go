@@ -142,7 +142,8 @@ func runSelfTest(args []string) {
 		case err != nil:
 			report("FAIL", "notify", err.Error())
 		case sent:
-			report("OK", "notify", "real Telegram message sent, "+with+" - check your phone")
+			n := len(cfg.Notifications.Telegram.recipients())
+			report("OK", "notify", fmt.Sprintf("real Telegram message sent to %d recipient(s), %s - check your phone", n, with))
 		default:
 			report("OK", "notify", "DRY RUN only - notifications.telegram not configured in config.yaml")
 		}

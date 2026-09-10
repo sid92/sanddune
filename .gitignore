@@ -14,6 +14,9 @@ state/
 gguf/**/*.gguf
 gguf/run_*_raw.log
 
+# service logs - the LaunchAgent appends here, machine-local like state/
+logs/
+
 # compiled Go binaries - build with `go build` inside backend/, don't commit
 /sanddune
 /sanddune.exe

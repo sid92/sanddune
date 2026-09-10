@@ -130,9 +130,30 @@ func (d TankDetectorConfig) objectsOrDefault() []ObjectConfig {
 	return []ObjectConfig{{ID: "default"}}
 }
 
+// TelegramConfig addresses one bot and one or more recipients. chat_id (a
+// single chat) and chat_ids (a list) both work and are unioned, so an existing
+// single-recipient config keeps working untouched while a second person can be
+// added without restructuring the file.
 type TelegramConfig struct {
-	BotToken string `yaml:"bot_token"`
-	ChatID   string `yaml:"chat_id"`
+	BotToken string   `yaml:"bot_token"`
+	ChatID   string   `yaml:"chat_id"`
+	ChatIDs  []string `yaml:"chat_ids"`
+}
+
+// recipients lists every chat to notify, de-duplicated so a chat named in both
+// chat_id and chat_ids doesn't get the same alert twice. "TBD" is the
+// placeholder the example config ships with and is never a real chat.
+func (t TelegramConfig) recipients() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, id := range append([]string{t.ChatID}, t.ChatIDs...) {
+		if id == "" || id == "TBD" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 type NotificationsConfig struct {

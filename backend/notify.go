@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // sendNotification sends via the Telegram Bot API directly (plain HTTPS
@@ -18,15 +19,49 @@ import (
 // bot token is just part of the URL. Returns false (dry-run/logged only) if
 // the bot token or chat ID aren't configured yet.
 func sendNotification(cfg *Config, message string) (bool, error) {
-	token := cfg.Notifications.Telegram.BotToken
-	chatID := cfg.Notifications.Telegram.ChatID
+	return deliver(cfg, message, "")
+}
 
-	if token == "" || chatID == "" || chatID == "TBD" {
+// deliver sends one message to every configured recipient, with the photo at
+// imagePath attached when there is one. Delivery is attempted for every
+// recipient even after one fails: a bot blocked by one person, or removed
+// from one group, must not silently cost everyone else their alert. The
+// error returned names whoever failed, and is only non-nil if at least one
+// did.
+func deliver(cfg *Config, message, imagePath string) (bool, error) {
+	token := cfg.Notifications.Telegram.BotToken
+	chats := cfg.Notifications.Telegram.recipients()
+
+	if token == "" || len(chats) == 0 {
 		log.Printf("[DRY RUN - Telegram not configured (bot_token/chat_id unset)] Would send notification: %s", message)
 		return false, nil
 	}
 
-	return true, telegramSend(token, chatID, message)
+	var failures []string
+	for _, chatID := range chats {
+		var err error
+		if imagePath != "" {
+			if err = telegramSendPhoto(token, chatID, message, imagePath); err != nil {
+				// Fall back to text rather than dropping the alert entirely -
+				// a message without its picture still tells someone what
+				// happened, which is most of the value.
+				log.Printf("sending proof photo to %s failed (%v) - falling back to text only", chatID, err)
+				err = telegramSend(token, chatID, message)
+			}
+		} else {
+			err = telegramSend(token, chatID, message)
+		}
+		if err != nil {
+			log.Printf("notifying %s failed: %v", chatID, err)
+			failures = append(failures, chatID)
+		}
+	}
+
+	if len(failures) > 0 {
+		return true, fmt.Errorf("failed to notify %d of %d recipients (%s)",
+			len(failures), len(chats), strings.Join(failures, ", "))
+	}
+	return true, nil
 }
 
 func telegramSend(token, chatID, text string) error {
@@ -56,21 +91,7 @@ func telegramSend(token, chatID, text string) error {
 // because the proof frame vanished would be a far worse failure than sending
 // it without a picture.
 func sendNotificationPhoto(cfg *Config, message, imagePath string) (bool, error) {
-	token := cfg.Notifications.Telegram.BotToken
-	chatID := cfg.Notifications.Telegram.ChatID
-
-	if token == "" || chatID == "" || chatID == "TBD" {
-		log.Printf("[DRY RUN - Telegram not configured (bot_token/chat_id unset)] Would send photo %s with caption: %s", imagePath, message)
-		return false, nil
-	}
-	if imagePath == "" {
-		return true, telegramSend(token, chatID, message)
-	}
-	if err := telegramSendPhoto(token, chatID, message, imagePath); err != nil {
-		log.Printf("sending proof photo %s failed (%v) - falling back to text only", imagePath, err)
-		return true, telegramSend(token, chatID, message)
-	}
-	return true, nil
+	return deliver(cfg, message, imagePath)
 }
 
 func telegramSendPhoto(token, chatID, caption, imagePath string) error {

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Generated from this template by install-service.sh - do not edit the
+  installed copy in ~/Library/LaunchAgents directly, it gets overwritten.
+  __PLACEHOLDERS__ are substituted at install time.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__LABEL__</string>
+
+    <!-- caffeinate -i -s holds off idle and system sleep for exactly as long
+         as sanddune runs, and releases it the moment the service stops. The
+         alternative (pmset -a disablesleep 1) needs sudo and silently leaves
+         the machine unable to sleep forever if the service is later removed.
+         A sleeping Mac is not a theoretical problem here: it cost 79% of the
+         samples in a real backfill run before it was diagnosed. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>-s</string>
+        <string>__PROJECT_DIR__/sanddune</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
+    <!-- launchd gives a job a minimal PATH that does NOT include Homebrew, so
+         without this the service starts, then fails every single check with
+         "ffmpeg: executable file not found". The brew prefix differs between
+         Apple Silicon (/opt/homebrew) and Intel (/usr/local), so it is
+         detected at install time rather than hardcoded. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__BREW_BIN__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Without this launchd treats the job as ordinary background work and
+         is free to defer it. It still will under Low Power Mode - see the
+         preflight check in install-service.sh, which refuses to install into
+         a state where the OS quietly declines to start the service. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it exits for any reason: a crash, an unhandled error, or
+         someone killing it by accident. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Don't respawn faster than this if it's crash-looping, so a broken
+         config produces a readable log instead of thousands of restarts. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>__PROJECT_DIR__/logs/sanddune.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_DIR__/logs/sanddune.log</string>
+</dict>
+</plist>
