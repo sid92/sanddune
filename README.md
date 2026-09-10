@@ -479,13 +479,25 @@ cost is that the machine has to reach a logged-in desktop — see below.
 Each of these was hit on real hardware while building the deploy, and each looks like a
 working install right up until the service is needed.
 
-**Low Power Mode defers the service forever.** macOS defers "non-demand" launchd spawns in
-Low Power Mode, and both `RunAtLoad` and `KeepAlive` are non-demand. `launchctl print` shows
-`pended nondemand spawn = inefficient`, the job reads as installed, and it simply never
-starts. Measured here: with Low Power Mode on, a killed service did not come back after
-three minutes, and a trivial `sleep` control job never started at all. `install-service.sh`
-refuses to install while it's on. Turn it off in System Settings → Battery → Low Power Mode
-→ Never, or `sudo pmset -a lowpowermode 0`.
+**Battery power and Low Power Mode both defer the service indefinitely.** macOS defers
+"non-demand" launchd spawns to save power, and both `RunAtLoad` and `KeepAlive` are
+non-demand. `launchctl print` shows `pended nondemand spawn = inefficient`, the job reads as
+installed, and it never starts — which looks identical to a healthy install until the moment
+it's needed.
+
+Measured on this hardware, all on battery:
+
+| state | result |
+|---|---|
+| Low Power Mode on | killed service never returned (3 min); a trivial `sleep` control job never started at all |
+| Low Power Mode off | killed service never returned (2 min); `pended nondemand spawn = inefficient` |
+
+Low Power Mode makes it worse but is not the cause — being on battery is enough. `launchctl
+kickstart` starts the job on demand and works in every state, which is why
+`install-service.sh` kickstarts explicitly rather than trusting `RunAtLoad`; but nothing
+forces a *restart* on demand, so crash recovery depends on the machine being on AC.
+`install-service.sh` refuses to install on battery or in Low Power Mode. Turn Low Power Mode
+off in System Settings → Battery → Low Power Mode → Never, or `sudo pmset -a lowpowermode 0`.
 
 **Sleep stops everything.** A sleeping Mac isn't running detections, and this is not
 hypothetical — it destroyed 79% of the samples in a real backfill run before it was

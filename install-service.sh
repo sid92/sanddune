@@ -68,9 +68,16 @@ else
 fi
 
 if [ "$ON_BATTERY" = "1" ]; then
-  echo "  WARNING: running on battery. Keep this Mac plugged in - the service"
-  echo "  needs to be awake through the whole monitoring window, and macOS is"
-  echo "  more aggressive about deferring background work on battery."
+  echo ""
+  echo "  Running on battery. macOS defers non-demand launchd spawns on"
+  echo "  battery power, which breaks the crash-restart guarantee: measured"
+  echo "  on this hardware, a killed service did not come back after two"
+  echo "  minutes even with Low Power Mode off."
+  echo ""
+  echo "  Plug this Mac in and re-run."
+  echo ""
+  [ "$FORCE" = "1" ] || fail "refusing to install on battery - KeepAlive will not restart the service (--force to override)"
+  echo "  continuing anyway because --force was given."
 else
   echo "  Power: plugged in"
 fi
