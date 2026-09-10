@@ -104,13 +104,31 @@ echo "wrote $PLIST_DEST"
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || launchctl unload "$PLIST_DEST" 2>/dev/null || true
 launchctl bootstrap "gui/$UID" "$PLIST_DEST" 2>/dev/null || launchctl load "$PLIST_DEST"
 
-sleep 2
-if launchctl list | grep -q "$LABEL"; then
+# bootstrap registers the job but does not reliably honour RunAtLoad - launchd
+# pends the spawn ("pended nondemand spawn = speculative") and the job sits at
+# runs = 0 looking installed. kickstart forces it to start now, which is what
+# "install and start" has to mean.
+launchctl kickstart "gui/$UID/$LABEL" 2>/dev/null || true
+
+# Verify an actual PID, not just presence in the list: a registered-but-never-
+# started job still appears in `launchctl list` with a "-" for its PID, which
+# is precisely the silent failure this check exists to catch.
+RUNNING_PID=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 1
+  RUNNING_PID="$(launchctl print "gui/$UID/$LABEL" 2>/dev/null | awk '/^\tpid =/{print $3}')"
+  [ -n "$RUNNING_PID" ] && break
+done
+
+if [ -n "$RUNNING_PID" ]; then
   echo ""
   echo "=== Running ==="
-  launchctl list | grep "$LABEL" | awk '{print "  PID " $1 "  last exit " $2 "  " $3}'
+  echo "  PID $RUNNING_PID"
 else
-  fail "service did not start - check logs/sanddune.log"
+  echo ""
+  echo "  launchd registered the job but did not start it. Current state:"
+  launchctl print "gui/$UID/$LABEL" 2>/dev/null | grep -E "state =|runs =|pended" | sed 's/^/    /'
+  fail "service did not start - see logs/sanddune.log, and check that Low Power Mode is off"
 fi
 
 cat <<EOF
