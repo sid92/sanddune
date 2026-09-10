@@ -21,7 +21,7 @@
         <string>/usr/bin/caffeinate</string>
         <string>-i</string>
         <string>-s</string>
-        <string>__PROJECT_DIR__/sanddune</string>
+        <string>__PROJECT_DIR__/deploy/run-sanddune.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -48,8 +48,15 @@
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- Restart if it exits for any reason: a crash, an unhandled error, or
-         someone killing it by accident. -->
+    <!-- Backstop only. KeepAlive could not be made to restart this service on
+         the machine it was built on - not on battery, not on AC, not with Low
+         Power Mode off, and not with the agent showing as allowed in
+         Background Task Management. launchd reported "pended nondemand spawn
+         = inefficient" and left the job stopped, and a minimal control agent
+         running only /bin/sleep behaved identically. So restarts are handled
+         by deploy/run-sanddune.sh, a plain loop that no power-management
+         heuristic gets a vote on. This key covers the case where the
+         supervisor itself dies. -->
     <key>KeepAlive</key>
     <true/>
 

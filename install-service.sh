@@ -25,6 +25,8 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 
 [ -f "$TEMPLATE" ] || fail "$TEMPLATE not found - run this from the project root."
 [ -x "./sanddune" ] || fail "./sanddune not built. Run ./setup-mac.sh first."
+chmod +x deploy/run-sanddune.sh 2>/dev/null || true
+[ -x "deploy/run-sanddune.sh" ] || fail "deploy/run-sanddune.sh missing or not executable."
 [ -f "config.yaml" ] || fail "config.yaml not found. Run ./setup-mac.sh, then edit config.yaml."
 
 if grep -q "camera-ip" config.yaml; then
@@ -39,6 +41,32 @@ else
   fail "Homebrew not found - ffmpeg and llama.cpp come from it. Run ./setup-mac.sh first."
 fi
 [ -x "$BREW_BIN/ffmpeg" ] || fail "ffmpeg not found in $BREW_BIN. Run ./setup-mac.sh first."
+
+# macOS TCC protects ~/Documents, ~/Desktop, ~/Downloads and iCloud Drive. A
+# LaunchAgent spawned by launchd has no access to them, so a project installed
+# there fails with "Operation not permitted" the moment launchd - rather than
+# your shell - tries to start it. It is invisible from a terminal, because a
+# command you run yourself inherits your shell's TCC grants and works fine.
+echo "=== Checking install location ==="
+case "$PROJECT_DIR/" in
+  "$HOME/Documents/"*|"$HOME/Desktop/"*|"$HOME/Downloads/"*|"$HOME/Library/Mobile Documents/"*)
+    echo ""
+    echo "  $PROJECT_DIR"
+    echo "  is inside a macOS privacy-protected folder. launchd cannot start"
+    echo "  anything from there - it fails with 'Operation not permitted' and"
+    echo "  the job silently never runs, even though it installs cleanly."
+    echo ""
+    echo "  Move the project somewhere unprotected and re-run, e.g.:"
+    echo "    mv \"$PROJECT_DIR\" ~/$(basename "$PROJECT_DIR") && cd ~/$(basename "$PROJECT_DIR") && ./install-service.sh"
+    echo ""
+    [ "$FORCE" = "1" ] || fail "refusing to install from a protected folder (--force to override)"
+    echo "  continuing anyway because --force was given."
+    ;;
+  *)
+    echo "  $PROJECT_DIR is outside the protected folders"
+    ;;
+esac
+echo ""
 
 # macOS will happily register a LaunchAgent and then decline to ever start it.
 # Low Power Mode defers "non-demand" spawns (RunAtLoad and KeepAlive both
@@ -68,16 +96,10 @@ else
 fi
 
 if [ "$ON_BATTERY" = "1" ]; then
-  echo ""
-  echo "  Running on battery. macOS defers non-demand launchd spawns on"
-  echo "  battery power, which breaks the crash-restart guarantee: measured"
-  echo "  on this hardware, a killed service did not come back after two"
-  echo "  minutes even with Low Power Mode off."
-  echo ""
-  echo "  Plug this Mac in and re-run."
-  echo ""
-  [ "$FORCE" = "1" ] || fail "refusing to install on battery - KeepAlive will not restart the service (--force to override)"
-  echo "  continuing anyway because --force was given."
+  echo "  WARNING: on battery. Restarts are handled by deploy/run-sanddune.sh"
+  echo "  rather than launchd, so crash recovery still works - but a laptop on"
+  echo "  battery will sleep, and a sleeping Mac runs no detections at all."
+  echo "  Keep it plugged in."
 else
   echo "  Power: plugged in"
 fi

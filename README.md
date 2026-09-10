@@ -436,94 +436,158 @@ go test -v ./...
 
 ## Deploying to a new machine
 
-The repo is private, so the target machine needs its own GitHub access first — either
-`gh auth login` there, or an SSH key / personal access token added to that machine's git.
+### Before you start: where the project lives matters
 
-```bash
-git clone https://github.com/sid92/sanddune.git && cd sanddune
-./setup-mac.sh          # Homebrew deps, build, download models (~1.8GB), create config.yaml
-$EDITOR config.yaml     # rtsp_url, telegram bot_token + chat_id, crop coordinates
-./cameracheck           # confirm this camera's proportions and clock before trusting crops
-./sanddune selftest     # camera + model + Telegram, end to end, using the real code paths
-./install-service.sh    # install as a LaunchAgent: starts at login, restarts on crash
+**Do not put the project in `~/Documents`, `~/Desktop`, `~/Downloads`, or iCloud Drive.**
+macOS TCC protects those folders, and a LaunchAgent spawned by launchd has no access to
+them. The install looks like it worked and the service never runs:
+
+```
+/bin/bash: /Users/you/Documents/sanddune/deploy/run-sanddune.sh: Operation not permitted
+shell-init: error retrieving current directory: getcwd: cannot access parent directories
 ```
 
-`config.yaml`, `gguf/`, `state/` and `logs/` are gitignored, so they're local to each
-machine and survive a pull. Every deployment needs its own crop coordinates confirmed
-against its own camera (see [Objects and crops](#objects-and-crops)) — coordinates from one
-physical layout don't transfer to another.
+This is invisible from a terminal, because a command *you* run inherits your shell's TCC
+grants and works perfectly — only launchd's own spawns fail. It cost a long debugging
+session here; `install-service.sh` now refuses to install from those paths. Use `~/sanddune`
+or `/usr/local/sanddune`.
 
-### Running as a service
+### Install
 
-`./install-service.sh` writes a LaunchAgent to `~/Library/LaunchAgents/com.sanddune.monitor.plist`
-and starts it. It runs `./sanddune selftest` first and refuses to install if that fails —
-supervising a service that can't reach the camera or the model just converts one loud
-failure into a silent one repeating every minute in a log nobody reads. Pass `--force` to
-install anyway.
+The target machine needs its own GitHub access first — `gh auth login`, or an SSH key /
+personal access token on that machine.
+
+```bash
+cd ~                                    # NOT ~/Documents - see above
+git clone https://github.com/sid92/sanddune.git && cd sanddune
+./setup-mac.sh          # Homebrew deps, build, download models (~1.8GB), create config.yaml
+$EDITOR config.yaml     # see "What to put in config.yaml" below
+./cameracheck           # confirm this camera's proportions and clock BEFORE trusting crops
+./sanddune selftest     # camera + model + Telegram, end to end, real code paths
+./install-service.sh    # install and start the LaunchAgent
+```
+
+Each step fails loudly with instructions rather than continuing, so work down the list until
+`selftest` passes end to end.
+
+### What to put in config.yaml
+
+`config.yaml` is gitignored — it holds the bot token — so every machine needs its own. Start
+from `config.yaml.example`, which `setup-mac.sh` copies for you.
+
+| field | what it needs |
+|---|---|
+| `rtsp_url` | full RTSP URL with credentials, URL-encoded (`@` becomes `%40`) |
+| `schedule` | `day`, `window_start_hour`, `deadline_hour` — the message quotes these back, so they must be true |
+| `objects[].crop` | `[x, y, w, h]` **for this camera** — never copy from another deployment |
+| `capture.aspect_fix_width_scale` | only if `cameracheck` reports anamorphic transmission |
+| `telegram.bot_token` / `chat_id` | from @BotFather; a group id is negative and must be quoted |
+
+**Crops do not transfer between deployments.** They're pixel coordinates against one fixed
+camera pointed at one physical room. Set them by eye against a real frame from *that* camera
+(`state/selftest/<timestamp>/frame.jpg` after a selftest) — see
+[Objects and crops](#objects-and-crops).
+
+`config.yaml`, `gguf/`, `state/` and `logs/` are all gitignored, so they're local to each
+machine and survive `git pull`.
+
+### Running it as a service
+
+`./install-service.sh` runs preflight checks, then writes and starts
+`~/Library/LaunchAgents/com.sanddune.monitor.plist`. It refuses to install if:
+
+- the project is in a TCC-protected folder (the service could never start)
+- Low Power Mode is on (launchd defers the job indefinitely)
+- `./sanddune selftest` fails — supervising a service that can't reach the camera or the
+  model just turns one loud failure into a silent one repeating every minute
+
+`--force` overrides all three. It also warns, without blocking, when running on battery.
 
 ```bash
 tail -f logs/sanddune.log        # watch it work
 launchctl list | grep sanddune   # PID and last exit code
-./uninstall-service.sh           # stop it, remove it, leave everything else in place
-./update.sh                      # git pull + rebuild + restart the service
+./uninstall-service.sh           # stop and remove; leaves code, config, state, logs alone
+./update.sh                      # git pull + rebuild + restart
 ```
 
-**LaunchAgent, not LaunchDaemon.** A daemon starts at boot without anyone logging in, which
-sounds strictly better, but the local speaker alarm shells out to `say` and `afplay` and
-neither makes an audible sound from a root daemon with no GUI session. A silent alarm is
-worse than no alarm, because nobody discovers it's silent until the day it matters. The
-cost is that the machine has to reach a logged-in desktop — see below.
+### How restarts actually work
 
-### Three ways macOS will silently stop this from running
+**Not through launchd's `KeepAlive`.** That could not be made to restart the service on the
+machine this was built on, in any configuration tried:
 
-Each of these was hit on real hardware while building the deploy, and each looks like a
-working install right up until the service is needed.
-
-**Battery power and Low Power Mode both defer the service indefinitely.** macOS defers
-"non-demand" launchd spawns to save power, and both `RunAtLoad` and `KeepAlive` are
-non-demand. `launchctl print` shows `pended nondemand spawn = inefficient`, the job reads as
-installed, and it never starts — which looks identical to a healthy install until the moment
-it's needed.
-
-Measured on this hardware, all on battery:
-
-| state | result |
+| condition | result |
 |---|---|
-| Low Power Mode on | killed service never returned (3 min); a trivial `sleep` control job never started at all |
-| Low Power Mode off | killed service never returned (2 min); `pended nondemand spawn = inefficient` |
+| on battery, Low Power Mode on | no restart after 3 min |
+| on battery, Low Power Mode off | no restart after 2 min |
+| on AC, Low Power Mode off | no restart after 2 min |
+| minimal control agent running only `/bin/sleep` | no restart after 50s |
+| outside `~/Documents`, plain loop script | no restart after 60s |
 
-Low Power Mode makes it worse but is not the cause — being on battery is enough. `launchctl
-kickstart` starts the job on demand and works in every state, which is why
-`install-service.sh` kickstarts explicitly rather than trusting `RunAtLoad`; but nothing
-forces a *restart* on demand, so crash recovery depends on the machine being on AC.
-`install-service.sh` refuses to install on battery or in Low Power Mode. Turn Low Power Mode
-off in System Settings → Battery → Low Power Mode → Never, or `sudo pmset -a lowpowermode 0`.
+launchd reported `pended nondemand spawn = inefficient` throughout, and Background Task
+Management showed the agent as `[enabled, allowed, notified]`. Since a bare control agent
+failed identically, this is not something about this plist.
 
-**Sleep stops everything.** A sleeping Mac isn't running detections, and this is not
-hypothetical — it destroyed 79% of the samples in a real backfill run before it was
-diagnosed. The LaunchAgent wraps the binary in `caffeinate -i -s`, which holds off idle and
-system sleep for exactly as long as the service runs and releases it when the service stops
-(unlike `sudo pmset -a disablesleep 1`, which needs root and leaves the machine unable to
-sleep forever if the service is later removed). **Closing the lid still sleeps a laptop
-regardless.** Deploy on a Mac that stays open and plugged in, or a Mac mini.
+So restarts are handled by **`deploy/run-sanddune.sh`**, a plain supervisor loop that runs
+the binary, notices it exited, and starts it again — no power-management heuristic gets a
+vote. It backs off exponentially (5s to 60s) when the binary dies within a minute of
+starting, so a misconfiguration leaves a readable log instead of thousands of restarts, and
+resets to 5s after any run lasting a minute or more. Verified: killing the child produced
+`supervisor: sanddune exited with code 137 after 12s - restarting in 10s` and a new process.
 
-**Login is required.** A LaunchAgent starts when a user logs in, so after a reboot the
-machine must reach a logged-in desktop or nothing runs. Enable automatic login (System
-Settings → Users & Groups → Automatically log in as) on a dedicated deployment machine, or
-accept that a reboot needs someone to log in.
+`KeepAlive` is still set in the plist as a backstop for the supervisor itself dying, but
+nothing depends on it.
 
-The service surviving a crash is handled (`KeepAlive`, with `ThrottleInterval` so a broken
-config produces a readable log instead of thousands of restarts). The service surviving the
-above is a deployment decision, not something the code can fix.
+launchd's *on-demand* spawn (`launchctl kickstart`) works reliably in every state tested,
+which is why `install-service.sh` kickstarts explicitly rather than trusting `RunAtLoad`.
+
+### Three more ways macOS will silently stop this
+
+**Sleep stops everything.** A sleeping Mac runs no detections. This is not hypothetical — it
+destroyed 79% of the samples in a real backfill run before it was diagnosed. The LaunchAgent
+wraps the supervisor in `caffeinate -i -s`, which holds off idle and system sleep for
+exactly as long as the service runs and releases it when the service stops (unlike `sudo
+pmset -a disablesleep 1`, which needs root and leaves the machine unable to sleep forever if
+the service is later removed). **Closing the lid still sleeps a laptop regardless.**
+
+**Login is required.** A LaunchAgent starts at login, not at boot, so after a reboot the
+machine must reach a logged-in desktop. Enable automatic login in System Settings → Users &
+Groups. This is why it's a LaunchAgent and not a LaunchDaemon: the local alarm shells out to
+`say` and `afplay`, and neither is audible from a root daemon with no GUI session. A silent
+alarm is worse than no alarm, because nobody finds out it's silent until the day it matters.
+
+**Low Power Mode defers the job.** System Settings → Battery → Low Power Mode → Never, or
+`sudo pmset -a lowpowermode 0`.
+
+**The deployment machine this all argues for is a Mac mini**: always on mains, no lid, no
+battery, auto-login trivial to set.
+
+### Verifying a deployment is actually working
+
+```bash
+./sanddune selftest              # full chain: camera pull, inference, Telegram with photo
+./sanddune selftest -notify=false          # skip the Telegram send
+./sanddune selftest -object=tank_area      # one object only
+```
+
+`selftest` runs every check even after one fails, printing `OK`/`FAIL`/`SKIP` per line, and
+saves what the model actually saw to `state/selftest/<timestamp>/`. Look at those crops — a
+green `OK` on the model check only means it answered, not that it was pointed at the right
+part of the room.
+
+After installing the service, confirm a real PID:
+
+```bash
+launchctl list | grep sanddune   # a "-" instead of a PID means it is NOT running
+```
 
 ### Updating a live deployment
 
 ```bash
-./update.sh   # git pull + rebuild, then restarts the LaunchAgent if it's installed
+./update.sh   # git pull + rebuild, then restarts the LaunchAgent if installed
 ```
 
 Config, models and state are untouched. If no LaunchAgent is installed it says so rather
-than pretending it restarted anything — rebuilding without restarting leaves the old binary
+than pretending it restarted something — rebuilding without restarting leaves the old binary
 running against new code on disk, which looks exactly like an update that silently did
 nothing.
 
