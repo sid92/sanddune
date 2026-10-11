@@ -13,7 +13,7 @@
   "message_prefix": "[Clef test]",
   "gate": {
     "model": "clef-flash",
-    "interval_s": 10,
+    "interval_s": 30,
     "threshold": 0.5
   },
   "active": {

@@ -58,6 +58,9 @@ def load_env(path):
 
 def load_config():
     cfg = json.load(open(os.path.join(HERE, "config.json")))
+    # defaults for keys an older config.json may lack (e.g. one filled before Layer 2 existed)
+    cfg.setdefault("layer2", {"model": "clef", "threshold": 0.8, "max_rows": 400})
+    cfg.setdefault("decision", {"hands_min": 0.6, "object_min": 0.6, "frames_needed": 3})
     load_env(os.path.join(HERE, ".env"))
     cfg["_account"] = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
     cfg["_token"] = os.environ.get("CLOUDFLARE_AUTH_TOKEN", "") or os.environ.get("CLOUDFLARE_API_TOKEN", "")
@@ -77,9 +80,22 @@ def ffmpeg_bin(cfg):
 
 
 # ---------------------------------------------------------------- camera
-def grab(cfg, src, out_dir, offset_s=None, with_crop=True):
-    """One frame -> (full.jpg, crop.jpg|None). Fixes anamorphic pixels, crops the tank tops."""
-    scale = cfg.get("aspect_fix_width_scale")
+def stream(cfg, layer):
+    """(rtsp_url, aspect_fix_width_scale) for a layer ("gate" or "active"). Each layer may name its own stream:
+    the gate can use a low-res sub-stream that is NOT anamorphic, the active layer the anamorphic main stream,
+    so the URL and the aspect fix are configured together. Falls back to the top-level keys."""
+    lc = cfg.get(layer, {})
+    url = lc.get("rtsp_url") or cfg.get("rtsp_url", "")
+    aspect = lc["aspect_fix_width_scale"] if "aspect_fix_width_scale" in lc else cfg.get("aspect_fix_width_scale")
+    return url, aspect
+
+
+def grab(cfg, layer, out_dir, offset_s=None, with_crop=True, src=None):
+    """One frame -> (full.jpg, crop.jpg|None). Fixes anamorphic pixels, never upscales, crops the tank tops.
+    src overrides the layer's stream (replay of a recorded file). One retry: this DVR throws transient
+    '453 Not Enough Bandwidth' when several clients pull at once."""
+    url, scale = stream(cfg, layer)
+    src = src or url
     fix = f"scale=iw*{scale}:ih,setsar=1" if scale else "scale=iw*sar:ih,setsar=1"
     full, crop = os.path.join(out_dir, "full.jpg"), os.path.join(out_dir, "crop.jpg")
     cmd = [ffmpeg_bin(cfg), "-v", "error", "-y"]
@@ -88,19 +104,28 @@ def grab(cfg, src, out_dir, offset_s=None, with_crop=True):
     if offset_s is not None:
         cmd += ["-ss", f"{offset_s:.2f}"]
     cmd += ["-i", src]
-    w = cfg.get("send_width", 1024)
+    down = f"scale=w=min(iw\\,{cfg.get('send_width', 1024)}):h=-2"  # cap the width, never upscale
     c = cfg.get("tank_top_crop_fraction")  # [x, y, w, h] as fractions of the corrected frame
     if with_crop and c:
         cmd += ["-filter_complex",
-                f"[0:v]{fix},split=2[a][b];[a]scale={w}:-2[f];[b]crop=iw*{c[2]}:ih*{c[3]}:iw*{c[0]}:ih*{c[1]}[c]",
+                f"[0:v]{fix},split=2[a][b];[a]{down}[f];[b]crop=iw*{c[2]}:ih*{c[3]}:iw*{c[0]}:ih*{c[1]}[c]",
                 "-map", "[f]", "-frames:v", "1", "-q:v", "5", full,
                 "-map", "[c]", "-frames:v", "1", "-q:v", "4", crop]
     else:
-        cmd += ["-vf", f"{fix},scale={w}:-2", "-frames:v", "1", "-q:v", "5", full]
+        cmd += ["-vf", f"{fix},{down}", "-frames:v", "1", "-q:v", "5", full]
         crop = None
-    subprocess.run(cmd, check=True, timeout=cfg.get("grab_timeout_s", 25),
-                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    return full, crop
+    err = ""
+    for attempt in range(2):
+        try:
+            subprocess.run(cmd, check=True, timeout=cfg.get("grab_timeout_s", 25),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            return full, crop
+        except subprocess.CalledProcessError as e:
+            err = e.stderr.decode(errors="replace").strip()[-200:]
+        except subprocess.TimeoutExpired:
+            err = "timeout"
+        time.sleep(2)
+    raise RuntimeError(f"camera grab failed ({layer} stream): {err}")
 
 
 # ---------------------------------------------------------------- Clef (Workers AI)
@@ -248,11 +273,11 @@ class Detector:
         res = clef(self.cfg, g["model"], "A frame from a fixed CCTV camera in a utility room.", GATE_Q, [full])
         return simple(res)["person_present"], res
 
-    def step(self, now, src, offset_s=None):
+    def step(self, now, src=None, offset_s=None):
         g, a = self.cfg["gate"], self.cfg["active"]
         with tempfile.TemporaryDirectory() as tmp:
             if self.mode == "idle":
-                full, _ = grab(self.cfg, src, tmp, offset_s, with_crop=False)
+                full, _ = grab(self.cfg, "gate", tmp, offset_s, with_crop=False, src=src)
                 p, res = self._person_gate(now, full)
                 self._record(now, "gate", res, full, None,
                              keep=p >= g["threshold"] or (now.minute % 5 == 0 and now.second < g["interval_s"]))
@@ -261,7 +286,7 @@ class Detector:
                     return g["interval_s"]
                 self.mode, self.last_seen, self.visit = "active", now, []
                 log("-> ACTIVE (person present)")
-            full, crop = grab(self.cfg, src, tmp, offset_s, with_crop=True)
+            full, crop = grab(self.cfg, "active", tmp, offset_s, with_crop=True, src=src)
             res = clef(self.cfg, a["model"], STATE_TEXT, ACTIVE_Q, [full, crop] if crop else [full])
             row = self._record(now, "active", res, full, crop, keep=True)
             s = row["answers"]
@@ -362,7 +387,7 @@ def cmd_run():
         det.cfg = cfg
         t0 = time.time()
         try:
-            wait = det.step(now, cfg["rtsp_url"])
+            wait = det.step(now)  # each layer pulls its own stream
             errors = 0
         except Exception as e:
             errors += 1
@@ -409,21 +434,35 @@ def cmd_replay(path, start, full=False):
 def cmd_selftest(notify):
     cfg = load_config()
     ok = True
-    for k in ["rtsp_url", "_account", "_token"]:
+    for layer in ["gate", "active"]:
+        if not stream(cfg, layer)[0]:
+            print(f"FAIL config: no rtsp_url for the {layer} layer"); ok = False
+    for k in ["_account", "_token"]:
         if not cfg.get(k):
-            print(f"FAIL config: {k} missing"); ok = False
+            print(f"FAIL config: {k[1:]} missing from .env"); ok = False
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            full, crop = grab(cfg, cfg["rtsp_url"], tmp)
-            keep = os.path.join(HERE, "selftest_frame.jpg"); shutil.copy(full, keep)
-            if crop: shutil.copy(crop, os.path.join(HERE, "selftest_crop.jpg"))
-            print(f"OK   camera: frame saved to {keep} (check the crop in selftest_crop.jpg covers the tank tops)")
+            url, asp = stream(cfg, "gate")
+            full, _ = grab(cfg, "gate", tmp, with_crop=False)
+            shutil.copy(full, os.path.join(HERE, "selftest_gate.jpg"))
             r = clef(cfg, cfg["gate"]["model"], "A frame from a fixed CCTV camera in a utility room.", GATE_Q, [full])
-            print(f"OK   gate ({cfg['gate']['model']}): person_present={simple(r)['person_present']:.2f}, {r['_ms']} ms")
-            r = clef(cfg, cfg["active"]["model"], STATE_TEXT, ACTIVE_Q, [full, crop] if crop else [full])
-            print(f"OK   active ({cfg['active']['model']}): {r['_ms']} ms, {r.get('usage', {}).get('input_tokens')} tokens")
+            print(f"OK   gate stream (aspect {asp}) -> selftest_gate.jpg; {cfg['gate']['model']}: "
+                  f"person_present={simple(r)['person_present']:.2f}, {r['_ms']} ms, {r.get('usage', {}).get('input_tokens')} tokens")
         except Exception as e:
-            print(f"FAIL {e}"); ok = False
+            print(f"FAIL gate: {e}"); ok = False
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            url, asp = stream(cfg, "active")
+            full, crop = grab(cfg, "active", tmp)
+            shutil.copy(full, os.path.join(HERE, "selftest_frame.jpg"))
+            if crop: shutil.copy(crop, os.path.join(HERE, "selftest_crop.jpg"))
+            r = clef(cfg, cfg["active"]["model"], STATE_TEXT, ACTIVE_Q, [full, crop] if crop else [full])
+            print(f"OK   active stream (aspect {asp}) -> selftest_frame.jpg + selftest_crop.jpg (crop must show the tank tops; "
+                  f"people/tanks must not look stretched); {cfg['active']['model']}: {r['_ms']} ms, {r.get('usage', {}).get('input_tokens')} tokens")
+            r = clef(cfg, cfg["layer2"]["model"], L2_STATE + "\nToday's observations:\n(none yet)", L2_Q, [])
+            print(f"OK   layer2 ({cfg['layer2']['model']}): {r['_ms']} ms")
+        except Exception as e:
+            print(f"FAIL active/layer2: {e}"); ok = False
     if notify:
         telegram(cfg, "Self-test from the parallel tank detector (no action needed).")
         print("sent Telegram test message")

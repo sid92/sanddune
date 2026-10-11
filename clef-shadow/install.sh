@@ -11,7 +11,7 @@ case "$DIR" in
     echo "Refusing: $DIR is a macOS-protected folder; launchd jobs there fail silently. Move it (e.g. ~/clef-shadow)."; exit 1;;
 esac
 [ -f "$DIR/.env" ] || { echo "Missing $DIR/.env (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AUTH_TOKEN)"; exit 1; }
-/usr/bin/python3 -c "import json;c=json.load(open('$DIR/config.json'));assert c['rtsp_url'] and c['telegram']['bot_token'] and c['telegram']['chat_ids'], 'fill rtsp_url and telegram in config.json'"
+/usr/bin/python3 -c "import json;c=json.load(open('$DIR/config.json'));assert (c.get('rtsp_url') or c.get('active',{}).get('rtsp_url')) and c['telegram']['bot_token'] and c['telegram']['chat_ids'], 'fill rtsp_url (or gate/active rtsp_url) and telegram in config.json'"
 
 mkdir -p "$DIR/logs" "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<EOF
