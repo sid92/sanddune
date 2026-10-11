@@ -1,0 +1,13 @@
+{
+  "rtsp_url": "",
+  "aspect_fix_width_scale": null,
+  "schedule": {"day": "monday", "window_start_hour": 7, "deadline_hour": 14},
+  "telegram": {"bot_token": "", "chat_ids": []},
+  "message_prefix": "[Clef test]",
+  "gate":     {"model": "clef-flash", "interval_s": 10, "threshold": 0.5},
+  "active":   {"model": "clef-omni",  "interval_s": 5,  "leave_after_s": 30},
+  "decision": {"hands_min": 0.6, "object_min": 0.6, "frames_needed": 3},
+  "tank_top_crop_fraction": [0.5469, 0.0741, 0.3646, 0.4444],
+  "send_width": 1024,
+  "error_alert_after": 10
+}

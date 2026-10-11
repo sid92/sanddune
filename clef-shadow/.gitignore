@@ -1,0 +1,8 @@
+.env
+records/
+test_logs/
+state/
+logs/
+selftest_*.jpg
+__pycache__/
+.DS_Store
