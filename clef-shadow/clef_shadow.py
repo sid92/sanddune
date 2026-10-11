@@ -14,7 +14,7 @@ Standard library + ffmpeg only (macOS /usr/bin/python3 3.9 is enough).
 
   python3 clef_shadow.py run                     # the service (launchd runs this)
   python3 clef_shadow.py selftest [--notify]     # one real camera grab + both model calls
-  python3 clef_shadow.py replay FILE HH:MM:SS     # run the same logic over a recorded clip
+  python3 clef_shadow.py replay FILE HH:MM:SS [--full]  # same logic over a recorded clip
 """
 import base64, datetime as dt, json, os, shutil, subprocess, sys, tempfile, time, traceback
 import urllib.error, urllib.parse, urllib.request
@@ -109,7 +109,7 @@ def clef(cfg, model, state, questions, images):
     if sum(len(i["base64"]) for i in imgs) > B64_BUDGET:
         raise RuntimeError("images too large for the request budget; lower send_width")
     url = f"https://api.cloudflare.com/client/v4/accounts/{cfg['_account']}/ai/run/@cf/cloudflare/{model}"
-    body = json.dumps({"model": model, "state": state, "questions": questions, "images": imgs}).encode()
+    body = json.dumps({"model": model, "state": state, "questions": questions, **({"images": imgs} if imgs else {})}).encode()
     last = None
     for attempt in range(3):
         req = urllib.request.Request(url, data=body, method="POST",
@@ -165,38 +165,97 @@ def telegram(cfg, text, photo=None, dry=False):
             log(f"telegram FAILED for {chat}: {e}")
 
 
+# ---------------------------------------------------------------- Layer 2 (Clef reads the day's timeline)
+L2_STATE = """You interpret observations from a fixed CCTV camera in a utility room with several large water tanks.
+A vision model (Layer 1) looked at one frame every 5 seconds while a person was present and answered
+yes/no questions about what is VISIBLE; each number is its probability (0-1) that the answer is yes.
+"persons" is the expected number of people. Lines starting with "--- visit" mark a new visit (gap > 30 s).
+
+Site knowledge:
+- MEASUREMENT: a person climbs to the tank tops and dips a long rod into a tank opening to check the level,
+  often several times or at several tanks, then leaves. Typically 1-3 minutes.
+- REFILL: a person brings a hose to a tank, puts it into the tank opening, and the hose stays there for
+  minutes while water flows; people may come and go while the hose stays in.
+- NONE: people walk through, look around, or work elsewhere without working at a tank opening.
+
+Known quirks of the Layer 1 numbers:
+- Single frames are noisy. Base the decision on patterns sustained over several frames, never one frame.
+- Rod and hose are often confused: in rod frames hose_held can also be high. Compare rod_held vs hose_held
+  across the visit instead of reading either alone; a hose staying in the opening for minutes means refill.
+- hands@open briefly high while someone passes the tanks is NOT activity; sustained hands@open with an
+  object held is.
+- The "into opening" questions are weak; treat them as supporting evidence only.
+- persons can drop to ~0 for a few frames while the person is still there (hidden behind tanks).
+"""
+L2_Q = {"activity": {"type": "choice",
+        "instructions": "Based on the whole sequence of observations, what tank activity happened today?",
+        "criteria": {
+            "measurement": "A person dips a long rod into a tank opening to check the level, often several times: "
+                           "rod_held stays above hose_held over several frames with hands at the opening.",
+            "refill": "A hose is put into a tank opening and stays there for minutes: hose_held stays above rod_held "
+                      "and hands@open / hose_into stay elevated over many frames.",
+            "none": "People walk past or work elsewhere: no sustained hands at a tank opening with a hose or rod held."}}}
+L2_COLS = [("person_count", "persons"), ("hands_at_tank_opening", "hands@open"), ("person_on_top_of_tank", "on_tank"),
+           ("hose_or_pipe_held_by_person", "hose_held"), ("rod_held_by_person", "rod_held"),
+           ("hose_or_pipe_into_tank_opening", "hose_into"), ("rod_into_tank_opening", "rod_into"),
+           ("tank_lid_open", "lid_open"), ("visibility", "visibility")]
+
+
+def l2_table(rows, max_rows):
+    rows = rows[-max_rows:]
+    lines, last = ["time     " + " ".join(f"{h:>10}" for _, h in L2_COLS)], None
+    for r in rows:
+        t = dt.datetime.fromisoformat(r["time"])
+        if last is None or (t - last).total_seconds() > 30:
+            lines.append(f"--- visit starting {t:%H:%M:%S}")
+        last = t
+        a = r["answers"]
+        lines.append(r["time"][11:19] + " " + " ".join(
+            f"{a[k]:10.2f}" if isinstance(a.get(k), (int, float)) else f"{str(a.get(k))[:10]:>10}" for k, _ in L2_COLS))
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- the decision logic (shared by run + replay)
 class Detector:
-    """One day's state machine. step() takes a timestamp + source, returns seconds to wait."""
+    """One day's state machine. step() takes a timestamp + source and returns seconds to wait.
+    A visit ends after active.leave_after_s with no person (Clef-omni AND the gate model agree);
+    then Layer 2 reads the whole day's timeline and decides."""
 
     def __init__(self, cfg, rec_dir):
         self.cfg, self.rec_dir = cfg, rec_dir
-        self.mode, self.last_seen, self.visit, self.done, self.result = "idle", None, [], False, None
+        self.mode, self.last_seen, self.visit, self.done, self.result, self.photo = "idle", None, [], False, None, None
         os.makedirs(rec_dir, exist_ok=True)
-        self.calls = open(os.path.join(rec_dir, "calls.jsonl"), "a")
+        path = os.path.join(rec_dir, "calls.jsonl")
+        # the day's Layer 1 timeline survives restarts: reload today's active observations
+        self.timeline = [r for r in (json.loads(l) for l in open(path)) if r["phase"] == "active"] if os.path.exists(path) else []
+        self.calls = open(path, "a")
 
     def _record(self, now, phase, res, full, crop, keep):
         stamp = now.strftime("%H%M%S")
         saved = None
-        if keep:
+        if keep and full:
             saved = os.path.join(self.rec_dir, f"{stamp}_{phase}.jpg")
             shutil.copy(full, saved)
             if crop:
                 shutil.copy(crop, os.path.join(self.rec_dir, f"{stamp}_{phase}_crop.jpg"))
-        self.calls.write(json.dumps({"time": now.isoformat(timespec="seconds"), "phase": phase, "ms": res.get("_ms"),
-                                     "tokens": res.get("usage", {}).get("input_tokens"), "answers": simple(res),
-                                     "frame": saved}) + "\n")
-        self.calls.flush()
-        return saved
+        row = {"time": now.isoformat(timespec="seconds"), "phase": phase, "ms": res.get("_ms"),
+               "tokens": res.get("usage", {}).get("input_tokens"), "answers": simple(res), "frame": saved}
+        self.calls.write(json.dumps(row) + "\n"); self.calls.flush()
+        return row
+
+    def _person_gate(self, now, full):
+        g = self.cfg["gate"]
+        res = clef(self.cfg, g["model"], "A frame from a fixed CCTV camera in a utility room.", GATE_Q, [full])
+        return simple(res)["person_present"], res
 
     def step(self, now, src, offset_s=None):
-        g, a, d = self.cfg["gate"], self.cfg["active"], self.cfg["decision"]
+        g, a = self.cfg["gate"], self.cfg["active"]
         with tempfile.TemporaryDirectory() as tmp:
             if self.mode == "idle":
-                full, crop = grab(self.cfg, src, tmp, offset_s, with_crop=False)
-                res = clef(self.cfg, g["model"], "A frame from a fixed CCTV camera in a utility room.", GATE_Q, [full])
-                p = simple(res)["person_present"]
-                self._record(now, "gate", res, full, None, keep=p >= g["threshold"] or now.minute % 5 == 0 and now.second < g["interval_s"])
+                full, _ = grab(self.cfg, src, tmp, offset_s, with_crop=False)
+                p, res = self._person_gate(now, full)
+                self._record(now, "gate", res, full, None,
+                             keep=p >= g["threshold"] or (now.minute % 5 == 0 and now.second < g["interval_s"]))
                 log(f"gate  person={p:.2f}")
                 if p < g["threshold"]:
                     return g["interval_s"]
@@ -204,30 +263,65 @@ class Detector:
                 log("-> ACTIVE (person present)")
             full, crop = grab(self.cfg, src, tmp, offset_s, with_crop=True)
             res = clef(self.cfg, a["model"], STATE_TEXT, ACTIVE_Q, [full, crop] if crop else [full])
-            s = simple(res)
-            saved = self._record(now, "active", res, full, crop, keep=True)
-        hose, rod, hands = s["hose_or_pipe_held_by_person"], s["rod_held_by_person"], s["hands_at_tank_opening"]
-        qualifies = hands >= d["hands_min"] and max(hose, rod) >= d["object_min"]
-        log(f"active persons~{s['person_count']:.1f} hands={hands:.2f} hose={hose:.2f} rod={rod:.2f}"
-            f"{'  <- qualifies' if qualifies else ''}")
-        if s["person_count"] >= 0.5:
+            row = self._record(now, "active", res, full, crop, keep=True)
+            s = row["answers"]
+            present = s["person_count"] >= 0.5
+            if not present:  # Clef-omni misses hidden/high-up people; confirm with the gate model before ending a visit
+                p, gres = self._person_gate(now, full)
+                self._record(now, "presence_check", gres, full, None, keep=False)
+                present = p >= g["threshold"]
+        self.timeline.append(row)
+        self.visit.append(row)
+        if present:
             self.last_seen = now
-        if qualifies:
-            self.visit.append({"time": now, "hose": hose, "rod": rod, "hands": hands, "frame": saved})
-        if len(self.visit) >= d["frames_needed"]:
-            margin = sum(v["rod"] - v["hose"] for v in self.visit) / len(self.visit)
-            kind = "MEASUREMENT (rod)" if margin > 0 else "REFILL (hose)"
-            best = max(self.visit, key=lambda v: v["hands"] + max(v["hose"], v["rod"]))
-            self.done = True
-            self.result = (f"Tank activity seen at {self.visit[0]['time']:%H:%M}: looks like {kind}. "
-                           f"{len(self.visit)} frames with hands at the tank opening holding a hose/rod "
-                           f"(rod-vs-hose {margin:+.2f}; positive = rod). Parallel test detector, not the official alarm.")
-            return 0
+        log(f"active persons~{s['person_count']:.1f}{'' if s['person_count'] >= 0.5 else (' (gate: present)' if present else ' (gate: absent)')}"
+            f" hands={s['hands_at_tank_opening']:.2f} hose={s['hose_or_pipe_held_by_person']:.2f} rod={s['rod_held_by_person']:.2f}")
         if (now - self.last_seen).total_seconds() >= a["leave_after_s"]:
+            log("-> visit ended (no person for %ss): Layer 2" % a["leave_after_s"])
+            self.decide(now)
             self.mode, self.visit = "idle", []
-            log("-> IDLE (no person for %ss)" % a["leave_after_s"])
             return g["interval_s"]
         return a["interval_s"]
+
+    def _best_frame(self, rows):
+        rows = [r for r in rows if r.get("frame")]
+        if not rows:
+            return None
+        key = lambda r: r["answers"]["hands_at_tank_opening"] + max(r["answers"]["hose_or_pipe_held_by_person"],
+                                                                     r["answers"]["rod_held_by_person"])
+        return max(rows, key=key)["frame"]
+
+    def decide(self, now):
+        """Layer 2 over the whole day's timeline. Falls back to the frame-count rule if Clef is unreachable."""
+        if not self.timeline:
+            return
+        l2 = self.cfg["layer2"]
+        try:
+            state = L2_STATE + "\nToday's observations:\n" + l2_table(self.timeline, l2.get("max_rows", 400))
+            res = clef(self.cfg, l2["model"], state, L2_Q, [])
+            act = res["answers"]["activity"]
+            probs = act["probabilities"]
+            choice, p = act["choice"], probs[act["choice"]]
+            self._record(now, "layer2", res, None, None, keep=False)
+            log(f"LAYER 2 -> {choice} {p:.2f}  " + "  ".join(f"{k}:{v:.2f}" for k, v in probs.items()))
+            if choice in ("measurement", "refill") and p >= l2["threshold"]:
+                self.done, self.photo = True, self._best_frame(self.visit) or self._best_frame(self.timeline)
+                self.result = (f"Tank activity: looks like {choice.upper()} (probability {p:.2f}; "
+                               + ", ".join(f"{k} {v:.2f}" for k, v in probs.items())
+                               + f"). Decided at {now:%H:%M} from {len(self.timeline)} observations. "
+                                 "Parallel test detector, not the official alarm.")
+            self.last_l2 = (choice, probs)
+        except Exception as e:
+            log(f"LAYER 2 failed ({e}); using the frame-count rule")
+            d = self.cfg["decision"]
+            q = [r for r in self.visit if r["answers"]["hands_at_tank_opening"] >= d["hands_min"]
+                 and max(r["answers"]["hose_or_pipe_held_by_person"], r["answers"]["rod_held_by_person"]) >= d["object_min"]]
+            if len(q) >= d["frames_needed"]:
+                margin = sum(r["answers"]["rod_held_by_person"] - r["answers"]["hose_or_pipe_held_by_person"] for r in q) / len(q)
+                kind = "MEASUREMENT (rod)" if margin > 0 else "REFILL (hose)"
+                self.done, self.photo = True, self._best_frame(q)
+                self.result = (f"Tank activity: looks like {kind} (fallback rule: {len(q)} frames, rod-vs-hose {margin:+.2f}; "
+                               "Layer 2 was unavailable). Parallel test detector, not the official alarm.")
 
 
 # ---------------------------------------------------------------- commands
@@ -251,6 +345,12 @@ def cmd_run():
         if st.get("finished"):
             time.sleep(60); continue
         if now.hour >= sch["deadline_hour"]:
+            if det is not None and det_day == today and not det.done:
+                det.cfg = cfg
+                det.decide(now)  # last look over everything seen today
+            if det is not None and det.done:
+                telegram(cfg, det.result, photo=det.photo)
+                json.dump({**st, "finished": True, "result": det.result}, open(sp, "w")); continue
             telegram(cfg, f"No tank activity seen between {sch['window_start_hour']:02d}:00 and "
                           f"{sch['deadline_hour']:02d}:00. Parallel test detector, not the official alarm.")
             json.dump({**st, "finished": True, "result": "none"}, open(sp, "w")); continue
@@ -271,21 +371,25 @@ def cmd_run():
                 telegram(cfg, f"Problem: {errors} failures in a row, latest: {str(e)[:200]}")
             wait = 30
         if det.done:
-            best = max(det.visit, key=lambda v: v["hands"])["frame"]
-            telegram(cfg, det.result, photo=best)
+            telegram(cfg, det.result, photo=det.photo)
             json.dump({**st, "finished": True, "result": det.result}, open(sp, "w"))
             continue
         time.sleep(max(0, wait - (time.time() - t0)))
 
 
-def cmd_replay(path, start):
-    """Same Detector over a recorded clip on a virtual clock. Real Clef calls, Telegram printed only."""
+def cmd_replay(path, start, full=False):
+    """Same Detector over a recorded clip on a virtual clock. Real Clef calls, Telegram printed only.
+    full=True never confirms early, so the whole clip becomes a Layer 1 timeline (for Layer 2 tests)."""
     cfg = load_config()
+    if full:
+        cfg["layer2"]["threshold"] = 2.0  # never confirm: run Layer 1 over the whole clip
     dur = float(subprocess.run([ffmpeg_bin(cfg).replace("ffmpeg", "ffprobe"), "-v", "error", "-show_entries",
                                 "format=duration", "-of", "csv=p=0", path], capture_output=True, text=True).stdout)
     t0 = dt.datetime.combine(dt.date.today(), dt.datetime.strptime(start, "%H:%M:%S").time())
     name = os.path.splitext(os.path.basename(path))[0]
-    det = Detector(cfg, os.path.join(HERE, "records", f"replay_{name}"))
+    rec = os.path.join(HERE, "records", f"replay_{'full_' if full else ''}{name}")
+    shutil.rmtree(rec, ignore_errors=True)  # replays start clean
+    det = Detector(cfg, rec)
     off, calls = 0.0, 0
     while off < dur - 0.5 and not det.done:
         now = t0 + dt.timedelta(seconds=off)
@@ -293,6 +397,9 @@ def cmd_replay(path, start):
         wait = det.step(now, path, offset_s=off)
         calls += 1
         off += wait
+    if not det.done and det.mode == "active":
+        log("-> end of clip with a visit in progress: Layer 2")
+        det.decide(t0 + dt.timedelta(seconds=off))
     if det.done:
         telegram(cfg, det.result, dry=True)
     else:
@@ -328,7 +435,7 @@ if __name__ == "__main__":
     if not args or args[0] == "run":
         cmd_run()
     elif args[0] == "replay":
-        cmd_replay(args[1], args[2])
+        cmd_replay(args[1], args[2], full="--full" in args)
     elif args[0] == "selftest":
         cmd_selftest("--notify" in args)
     else:

@@ -4,16 +4,18 @@ Parallel tank-activity detector using Cloudflare **Clef** on Workers AI. Runs **
 sanddune as its own launchd job; it only *reads* the same camera and posts to the same
 Telegram chat with every message prefixed `[Clef test]`. It never writes sanddune's files.
 
-## Logic (inside the schedule window)
-| State | Every | Call | Next |
+## Logic (inside the schedule window) — every layer is Clef on Workers AI
+| Layer | Model | When | What |
 |---|---|---|---|
-| IDLE | 10 s | 1 frame → **clef-flash**: "is a person visible?" | person ≥ 0.5 → ACTIVE |
-| ACTIVE | 5 s | frame + tank-top crop → **clef-omni**, 9 observable questions | no person for 30 s → IDLE |
-| DONE | – | ≥ 3 frames in one visit with `hands_at_tank_opening ≥ 0.6` **and** hose or rod held ≥ 0.6 | Telegram + best frame, stop for the day |
-| DEADLINE | – | deadline hour reached without DONE | Telegram "no tank activity seen", stop for the day |
+| Gate | **clef-flash** | every 10 s while idle | "is a person visible?" ≥ 0.5 → start a visit |
+| Layer 1 | **clef-omni** | every 5 s during a visit | frame + tank-top crop → 9 observable questions (persons, hands at opening, hose/rod held, …) |
+| Visit end | clef-omni + clef-flash | | 30 s with no person (omni says none **and** the gate model confirms) |
+| Layer 2 | **clef** (27B) | at each visit end, and at the deadline | reads **today's whole Layer 1 timeline** (visits marked) → measurement / refill / none probabilities |
+| Result | | | measurement or refill ≥ 0.8 → Telegram `[Clef test]` + best frame, stop for the day; deadline without one → "no tank activity seen" |
 
-Type = average (rod − hose) over the qualifying frames: positive → measurement (rod), else refill (hose).
-Thresholds come from a handful of test clips — this is a trial, expect some wrong calls.
+If the Layer 2 call fails, the old rule decides (≥ 3 frames in the visit with hands at the opening and a
+hose/rod held ≥ 0.6; rod-vs-hose decides the type). Thresholds come from a handful of test clips — this is a trial.
+Layer 2 reads the whole day so a visit split by a person hiding behind the tanks is still judged as one.
 
 ## Files
 - `clef_shadow.py` — everything (stdlib + ffmpeg; `/usr/bin/python3` 3.9 is enough)
